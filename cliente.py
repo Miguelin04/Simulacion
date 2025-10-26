@@ -2,11 +2,13 @@
 
 
 class Cliente:
-    def __init__(self, id, dificultad_atencion):
+    def __init__(self, id, dificultad_atencion, articulos):
 
         self.id = id
         #falta la lista de los artículos que están en su otra clase.
         self.dificultad_atencion = dificultad_atencion
+        self.articulos = articulos
+        
 
 
     def __str__(self):
