@@ -1,6 +1,6 @@
 # importaciones necesarias
 #-----------------------------------------
-from Articulo import Articulo
+from articulo import Articulo
 import random
 #----------------------------------------
 

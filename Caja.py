@@ -1,7 +1,7 @@
 # importaciones necesarias
 #-------------------------------------
-from Cajero import Cajero
-from Cliente import Cliente
+from cajero import Cajero
+from cliente import Cliente
 #-------------------------------------
 
 class Caja:

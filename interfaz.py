@@ -1,4 +1,3 @@
-# interfaz.py (CORREGIDO)
 
 import time
 import os
