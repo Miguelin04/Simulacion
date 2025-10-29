@@ -7,10 +7,10 @@ class Pago:
     def _definir_tiempo(self, tipo):
 
         tiempos = {
-            "efectivo": 5,       # contar billetes, cambio
-            "tarjeta": 8,        # pasar tarjeta, validación
-            "transferencia": 12, # más lento
-            "qr": 6              # rápido pero no instantáneo
+            "efectivo": 5,      
+            "tarjeta": 8,       
+            "transferencia": 12, 
+            "qr": 6              
         }
         return tiempos.get(tipo.lower(), 5)
 
