@@ -4,10 +4,10 @@ from cajero import Cajero
 from cliente import Cliente
 #-------------------------------------
 
-class Caja:
 
+class Caja:
     #Constructor de la clase
-    def __init__(self, num_clientes):
+    def __init__(self, num_clientes, nombre=None):
         self.cajero = Cajero()
         self.clientes_en_fila = []
         for i in range(num_clientes):
@@ -18,6 +18,7 @@ class Caja:
         self.cliente_actual = None 
         self.tiempo_restante_cliente_actual = 0
         self.clientes_atendidos = []
+        self.nombre = nombre if nombre else ""
 
 
     #Con este método juego con el contenido del arreglo

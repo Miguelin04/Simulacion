@@ -12,10 +12,15 @@ function App() {
     setSimulando(true);
     setTiempo(0);
     clearInterval(timerRef.current);
-    setSimulacionActiva(false);
     setComparacionRojo([]);
     setMejorCajaRojo(null);
     setEstadoAnimado([]);
+    // Si la simulación no está activa ni en animación, limpiar cajas para permitir nuevos datos
+    if (!simulacionActiva && !enAnimacion) {
+      setCajas([]);
+      setCajaExpress(null);
+    }
+    setSimulacionActiva(false);
     // Limpiar cajas y crear estructura vacía
     await fetch('http://localhost:5000/api/simular_manual', {
       method: 'POST',
@@ -25,14 +30,10 @@ function App() {
     for (const nombreCaja in clientesPorCaja) {
       const cantidad = Number.parseInt(clientesPorCaja[nombreCaja] || '0', 10);
       if (cantidad > 0) {
-        let nombreCajaEnviar = nombreCaja;
-        if (cajaExpress && nombreCaja === cajaExpress.nombre) {
-          nombreCajaEnviar = 'Caja Express';
-        }
         await fetch('http://localhost:5000/api/agregar_clientes', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ cantidad, caja: nombreCajaEnviar })
+          body: JSON.stringify({ cantidad, caja: nombreCaja })
         });
       }
     }
@@ -91,6 +92,11 @@ function App() {
   const handleDetener = () => {
     clearInterval(timerRef.current);
     setEnAnimacion(false);
+    setSimulacionActiva(false);
+    setComparacionRojo([]);
+    setMejorCajaRojo(null);
+    setEstadoAnimado([]);
+    setTiempo(0);
   };
 
   // Cambiar número de clientes por caja

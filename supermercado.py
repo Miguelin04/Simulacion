@@ -3,6 +3,20 @@ from cliente import Cliente
 import random
 
 class Supermercado:
+   
+    def asignar_clientes_a_express(self, num_clientes):
+        print(f"Agregando {num_clientes} clientes a la caja express...")
+        for i in range(num_clientes):
+            cliente = Cliente(f"ClienteExpress_{i+1}")
+            cliente.num_articulos = random.randint(1, 10)
+            cliente.crear_lista_articulos()
+            cliente.seleccionar_tipo_pago()
+            self.todos_los_clientes.append(cliente)
+            self.caja_express.clientes_en_fila.append(cliente)
+            print(f"  - {cliente.nombre} con {cliente.num_articulos} artículos agregado a express")
+        print(f"Total en express: {len(self.caja_express.clientes_en_fila)}")
+        return len(self.caja_express.clientes_en_fila)
+    
     def asignar_clientes_random(self, num_clientes):
         # Asignar clientes de forma aleatoria respetando la lógica de la caja express
         from cajero import Cajero
@@ -20,14 +34,15 @@ class Supermercado:
             else:
                 # Solo puede ir a una caja normal
                 random.choice(self.cajas).clientes_en_fila.append(cliente)
+   
     def __init__(self, num_clientes, num_cajas=3):
-        self.cajas = [Caja(0) for _ in range(num_cajas)]  # Cajas normales
+        self.cajas = [Caja(0, nombre=f"Caja {i+1}") for i in range(num_cajas)]  # Cajas normales
         # Crear caja express solo con cajero Normal o Experto
         from cajero import Cajero
         cajero_express = Cajero()
         while cajero_express.experiencia == 1:  
             cajero_express = Cajero()
-        self.caja_express = Caja(0)
+        self.caja_express = Caja(0, nombre="Caja Express")
         self.caja_express.cajero = cajero_express
         self.todos_los_clientes = []
         # No asignar clientes al crear la simulación, solo cajas vacías

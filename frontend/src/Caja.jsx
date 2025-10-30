@@ -4,7 +4,11 @@ import './Caja.css';
 
 function Caja({ nombre, clientes, esExpress, esMejor, cajero, animando, atendidos = [], tiempoRestante }) {
   // Si está animando, solo mostrar los clientes que aún no han sido atendidos
-  const clientesEnFila = animando ? clientes : clientes;
+  // Ocultar el cliente rojo si la simulación no está animando y solo hay el cliente rojo
+  let clientesEnFila = clientes;
+  if (!animando) {
+    clientesEnFila = clientes.filter(c => c.nombre !== 'Cliente Rojo');
+  }
   const atendidosCount = animando ? atendidos.length : 0;
   // Mostrar el cliente que está siendo atendido con el tiempo restante
   return (

@@ -21,7 +21,19 @@ def simular_random():
 @app.route('/api/simular_manual', methods=['POST'])
 def simular_manual():
     global supermercado
-    supermercado = Supermercado(0)
+    # Solo reiniciar si no hay simulación activa o si todas las cajas están vacías
+    def cajas_vacias():
+        if supermercado is None:
+            return True
+        for caja in supermercado.cajas:
+            if caja.clientes_en_fila or caja.cliente_actual:
+                return False
+        if supermercado.caja_express.clientes_en_fila or supermercado.caja_express.cliente_actual:
+            return False
+        return True
+    global supermercado
+    if supermercado is None or cajas_vacias():
+        supermercado = Supermercado(0)
     return jsonify({"ok": True})
 from flask import Flask, jsonify, request
 from flask_cors import CORS
@@ -61,52 +73,59 @@ def agregar_clientes():
     data = request.get_json()
     cantidad = int(data.get('cantidad', 1))
     nombre_caja = data.get('caja')
+    print(f"[DEBUG] Nombre de caja recibido: '{nombre_caja}'")
+    # Buscar la caja por nombre
     cajas = supermercado.cajas + [supermercado.caja_express]
     caja_destino = None
-    if not nombre_caja or nombre_caja.strip() == '':
-        # Si no se especifica caja, asignar a la más vacía (menos clientes en fila)
-        caja_destino = min(cajas, key=lambda c: len(c.clientes_en_fila))
-    else:
-        nombre_caja_lower = nombre_caja.strip().lower()
-        for caja in cajas:
-            nombre_caja_backend = str(getattr(caja, 'nombre', '')).strip().lower()
-            if nombre_caja_lower == nombre_caja_backend:
+    nombre_caja_lower = nombre_caja.strip().lower()
+    for idx, caja in enumerate(cajas):
+        nombre_caja_backend = str(getattr(caja, 'nombre', '')).strip().lower()
+        print(f"[DEBUG] Comparando con caja backend: '{nombre_caja_backend}'")
+        if nombre_caja_lower == nombre_caja_backend:
+            caja_destino = caja
+            print(f"[DEBUG] Caja destino encontrada por nombre exacto: '{caja_destino.nombre}'")
+            break
+        # Solo cajas normales aceptan alias 'caja 1', 'caja 2', etc.
+        if idx < len(supermercado.cajas):
+            if nombre_caja_lower == f"caja {idx+1}":
                 caja_destino = caja
+                print(f"[DEBUG] Caja destino encontrada por alias normal: '{caja_destino.nombre}'")
                 break
-            if nombre_caja_lower in [f"caja {cajas.index(caja)+1}".lower(), "caja express", "express"]:
-                caja_destino = caja
-                break
-        if caja_destino is None:
-            # fallback: si es express
+        # Solo la express acepta 'caja express' o 'express'
+        if idx == len(cajas)-1:
             if nombre_caja_lower in ["caja express", "express"]:
-                caja_destino = supermercado.caja_express
-            else:
-                # buscar por nombre exacto
-                for caja in cajas:
-                    if nombre_caja == getattr(caja, 'nombre', None):
-                        caja_destino = caja
-                        break
+                caja_destino = caja
+                print(f"[DEBUG] Caja destino encontrada por alias express: '{caja_destino.nombre}'")
+                break
     if caja_destino is None:
-        return jsonify({'error': 'Caja no encontrada'}), 404
-    # Agregar clientes
-    for _ in range(cantidad):
-        cliente = Cliente(f"Cliente{random.randint(1000,9999)}")
-        if caja_destino == supermercado.caja_express:
-            cliente.num_articulos = random.randint(1, 10)
-            cliente.crear_lista_articulos()
-            cliente.seleccionar_tipo_pago()
-            # Solo agregar a express si tiene <=10 artículos
-            if cliente.num_articulos <= 10:
-                caja_destino.clientes_en_fila.append(cliente)
-            else:
-                # Si por alguna razón tiene más, asignar a la caja normal más vacía
-                caja_mas_vacia = min(supermercado.cajas, key=lambda c: len(c.clientes_en_fila))
-                caja_mas_vacia.clientes_en_fila.append(cliente)
+        # fallback: si es express
+        if nombre_caja_lower in ["caja express", "express"]:
+            caja_destino = supermercado.caja_express
+            print(f"[DEBUG] Caja destino fallback: 'Caja Express'")
         else:
+            # buscar por nombre exacto
+            for caja in cajas:
+                if nombre_caja == getattr(caja, 'nombre', None):
+                    caja_destino = caja
+                    print(f"[DEBUG] Caja destino encontrada por nombre exacto (fallback): '{caja_destino.nombre}'")
+                    break
+    if caja_destino is None:
+        print("[DEBUG] Caja no encontrada, abortando.")
+        return jsonify({'error': 'Caja no encontrada'}), 404
+    print(f"[DEBUG] Caja destino final: '{caja_destino.nombre}'")
+    # Si el destino es express, usar el método dedicado para asegurar la lógica correcta
+    if caja_destino == supermercado.caja_express:
+        print("[DEBUG] Asignando clientes a la caja express...")
+        asignados = supermercado.asignar_clientes_a_express(cantidad)
+        return jsonify({'ok': True, 'asignados_express': asignados})
+    else:
+        print(f"[DEBUG] Asignando clientes a la caja normal: '{caja_destino.nombre}'")
+        for _ in range(cantidad):
+            cliente = Cliente(f"Cliente{random.randint(1000,9999)}")
             cliente.crear_lista_articulos()
             cliente.seleccionar_tipo_pago()
             caja_destino.clientes_en_fila.append(cliente)
-    return jsonify({'ok': True})
+        return jsonify({'ok': True})
 
 
 if __name__ == '__main__':
