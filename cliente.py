@@ -27,10 +27,31 @@ class Cliente:
         self.metodo_pago = random.choice(opciones_pago)
 
 
-    # Calcula el tiempo total que ESTE cliente tardará en ser atendido
-    def calcular_tiempo_atencion(self, multiplicador_cajero):
-        tiempo_base_articulos = sum(articulo.tiempo_escaneo for articulo in self.articulos)
-        tiempo_real_escaneo = tiempo_base_articulos * multiplicador_cajero
-        tiempo_cobro = random.randint(5, 10) # tiempo cortito para simular
-        self.tiempo_total_atencion = tiempo_real_escaneo + tiempo_cobro # puede ser flotantante
-        return int(round(self.tiempo_total_atencion, 0)) # redondear para imprimir los segundos (no se como poner segundos y milisegundos)
+    def calcular_tiempo_atencion(self, multiplicador_cajero, experiencia_cajero=None, metodo_pago=None):
+        # Evitar comparaciones directas con floats
+        if experiencia_cajero is None:
+            if abs(multiplicador_cajero - 1.5) < 1e-6:
+                experiencia_cajero = 1
+            elif abs(multiplicador_cajero - 1.0) < 1e-6:
+                experiencia_cajero = 2
+            else:
+                experiencia_cajero = 3
+        if experiencia_cajero == 1:
+            tiempo_escaneo = 9
+        elif experiencia_cajero == 2:
+            tiempo_escaneo = 5
+        else:
+            tiempo_escaneo = 3
+
+        # Determinar método de pago
+        metodo = metodo_pago or self.metodo_pago
+        if metodo == "Efectivo":
+            tiempo_cobro = random.randint(20, 30)
+        elif metodo == "Tarjeta":
+            tiempo_cobro = random.randint(15, 25)
+        else:
+            tiempo_cobro = random.randint(10, 20)
+
+        tiempo_real_escaneo = self.num_articulos * tiempo_escaneo
+        self.tiempo_total_atencion = tiempo_real_escaneo + tiempo_cobro
+        return int(round(self.tiempo_total_atencion, 0))

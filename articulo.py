@@ -8,6 +8,7 @@ class Articulo:
 
     # Constructor de la clase
     def __init__(self):
+        #random se usa para simular la variabilidad en los tiempos
         self.tiempo_escaneo     = random.randint(1, 5)
         self.tiempo_empaquetado = random.randint(1, 5)
 
