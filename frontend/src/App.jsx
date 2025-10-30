@@ -89,7 +89,7 @@ function App() {
   const [clientesPorCaja, setClientesPorCaja] = useState({});
 
   // Detener simulación manualmente
-  const handleDetener = () => {
+  const handleDetener = async () => {
     clearInterval(timerRef.current);
     setEnAnimacion(false);
     setSimulacionActiva(false);
@@ -97,6 +97,21 @@ function App() {
     setMejorCajaRojo(null);
     setEstadoAnimado([]);
     setTiempo(0);
+    // Recargar estructura vacía para mostrar todas las cajas
+    try {
+      await fetch('http://localhost:5000/api/simular', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ num_clientes: 0 })
+      });
+      const estado = await fetch('http://localhost:5000/api/estado');
+      const data = await estado.json();
+      setCajas(data.cajas || []);
+      setCajaExpress(data.caja_express || null);
+    } catch {
+      setCajas([]);
+      setCajaExpress(null);
+    }
   };
 
   // Cambiar número de clientes por caja
