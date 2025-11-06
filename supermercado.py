@@ -8,7 +8,8 @@ class Supermercado:
         print(f"Agregando {num_clientes} clientes a la caja express...")
         for i in range(num_clientes):
             cliente = Cliente(f"ClienteExpress_{i+1}")
-            cliente.num_articulos = random.randint(1, 10)
+            # Aseguramos que el cliente tenga al menos 10 artículos
+            cliente.num_articulos = random.randint(10, 15)
             cliente.crear_lista_articulos()
             cliente.seleccionar_tipo_pago()
             self.todos_los_clientes.append(cliente)
@@ -22,18 +23,17 @@ class Supermercado:
         from cajero import Cajero
         for i in range(num_clientes):
             cliente = Cliente(f"Cliente_{i+1}")
+            # Ya el mínimo es 10 por la clase Cliente
             cliente.crear_lista_articulos()
             cliente.seleccionar_tipo_pago()
             self.todos_los_clientes.append(cliente)
             # Solo puede ir a la express si tiene <=10 artículos y el cajero es Experto o Normal
             puede_express = cliente.num_articulos <= 10 and self.caja_express.cajero.experiencia in [2,3]
+            # Pero como el mínimo es 10, solo clientes con 10 artículos pueden ir a express
             if puede_express:
                 self.caja_express.clientes_en_fila.append(cliente)
-                # También puede ir a una caja normal (simulación: asignar aleatoriamente)
-                random.choice(self.cajas).clientes_en_fila.append(cliente)
-            else:
-                # Solo puede ir a una caja normal
-                random.choice(self.cajas).clientes_en_fila.append(cliente)
+            # Todos los clientes pueden ir a una caja normal
+            random.choice(self.cajas).clientes_en_fila.append(cliente)
    
     def __init__(self, num_clientes, num_cajas=3):
         self.cajas = [Caja(0, nombre=f"Caja {i+1}") for i in range(num_cajas)]  # Cajas normales
@@ -45,7 +45,10 @@ class Supermercado:
         self.caja_express = Caja(0, nombre="Caja Express")
         self.caja_express.cajero = cajero_express
         self.todos_los_clientes = []
-        # No asignar clientes al crear la simulación, solo cajas vacías
+        # Cliente rojo fijo para toda la simulación
+        self.cliente_rojo = Cliente("Cliente Rojo")
+        self.cliente_rojo.crear_lista_articulos()
+        self.cliente_rojo.metodo_pago = "Efectivo"
 
     def asignar_clientes(self, num_clientes):
         for i in range(num_clientes):
@@ -64,15 +67,15 @@ class Supermercado:
         return all(caja.simulacion_terminada() for caja in self.cajas) and self.caja_express.simulacion_terminada()
 
     def obtener_estado(self):
-        # Simular un cliente rojo (especial) con artículos aleatorios
-        cliente_rojo_articulos = random.randint(1, 15)
+        # Usar el cliente rojo fijo
+        cliente_rojo_articulos = self.cliente_rojo.num_articulos
         tiempos_rojo = []
         cajas_estado = []
         for idx, caja in enumerate(self.cajas):
-            estado, tiempo_rojo = self._estado_caja(caja, idx+1, cliente_rojo_articulos)
+            estado, tiempo_rojo = self._estado_caja(caja, idx+1)
             cajas_estado.append(estado)
             tiempos_rojo.append((f"Caja {idx+1}", tiempo_rojo))
-        estado_express, tiempo_rojo_express = self._estado_caja(self.caja_express, 'Express', min(cliente_rojo_articulos, 10))
+        estado_express, tiempo_rojo_express = self._estado_caja(self.caja_express, 'Express')
         tiempos_rojo.append(("Caja Express", tiempo_rojo_express))
         resumen = self._comparar_tiempos_rojo(tiempos_rojo)
         return {
@@ -82,7 +85,7 @@ class Supermercado:
             'resumen_comparacion': resumen
         }
 
-    def _estado_caja(self, caja, nombre, articulos_rojo):
+    def _estado_caja(self, caja, nombre):
         # Calcular tiempo de atención estimado para cada cliente en la fila
         fila = caja.clientes_en_fila + ([caja.cliente_actual] if caja.cliente_actual else [])
         tiempo_acumulado = 0
@@ -100,11 +103,13 @@ class Supermercado:
                     'articulos': cliente.num_articulos,
                     'tiempo_estimado': tiempo_cliente
                 })
-        # Cliente rojo
-        cliente_rojo = Cliente("Cliente Rojo")
-        cliente_rojo.num_articulos = articulos_rojo
-        cliente_rojo.crear_lista_articulos()
-        cliente_rojo.metodo_pago = "Efectivo"
+        # Usar el cliente rojo fijo
+        cliente_rojo = self.cliente_rojo
+        # Si es la caja express, limitar a 10 artículos
+        if str(nombre).lower() == 'express' and cliente_rojo.num_articulos > 10:
+            num_articulos_original = cliente_rojo.num_articulos
+            cliente_rojo.num_articulos = 10
+            cliente_rojo.crear_lista_articulos()
         tiempo_rojo = cliente_rojo.calcular_tiempo_atencion(
             caja.cajero.multiplicador_velocidad,
             experiencia_cajero=caja.cajero.experiencia,
@@ -117,6 +122,10 @@ class Supermercado:
             'tiempo_estimado': tiempo_rojo,
             'es_rojo': True
         })
+        # Restaurar el número de artículos si fue modificado
+        if str(nombre).lower() == 'express' and hasattr(self.cliente_rojo, 'num_articulos') and 'num_articulos_original' in locals():
+            self.cliente_rojo.num_articulos = num_articulos_original
+            self.cliente_rojo.crear_lista_articulos()
         return {
             'nombre': f"Caja {nombre}",
             'cajero': {
@@ -129,7 +138,7 @@ class Supermercado:
                 {'nombre': c.nombre, 'articulos': c.num_articulos} for c in caja.clientes_atendidos
             ],
             'cliente_rojo': {
-                'articulos': articulos_rojo,
+                'articulos': clientes_fila[-1]['articulos'],
                 'tiempo_estimado': tiempo_total
             }
         }, tiempo_total

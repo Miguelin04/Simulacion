@@ -130,7 +130,6 @@ def agregar_clientes():
         return jsonify({'error': 'Caja no encontrada'}), 404
     print(f"[DEBUG] Caja destino final: '{caja_destino.nombre}'")
     # Si el destino es express, usar el método dedicado para asegurar la lógica correcta
-    # Asignar el tipo de cajero si se especifica
     if tipo_cajero:
         from cajero import Cajero
         if tipo_cajero == "Principiante":
@@ -151,6 +150,7 @@ def agregar_clientes():
         print(f"[DEBUG] Asignando clientes a la caja normal: '{caja_destino.nombre}'")
         for _ in range(cantidad):
             cliente = Cliente(f"Cliente{random.randint(1000,9999)}")
+            cliente.num_articulos = random.randint(10, 15)
             cliente.crear_lista_articulos()
             cliente.seleccionar_tipo_pago()
             caja_destino.clientes_en_fila.append(cliente)
