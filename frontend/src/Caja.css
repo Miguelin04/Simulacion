@@ -1,0 +1,98 @@
+/* Caja visual principal */
+/* Caja visual principal */
+.caja {
+  border: 2.5px solid #eee;
+  border-radius: 14px;
+  padding: 24px 24px 18px 24px;
+  margin: 20px 12px;
+  width: 320px;
+  background: #2d323c;
+  box-shadow: 2px 2px 16px #111a;
+  display: inline-block;
+  vertical-align: top;
+  transition: box-shadow 0.3s, border-color 0.3s;
+  position: relative;
+  color: #fff;
+}
+/* Mejor caja */
+.caja.mejor {
+  border-color: #1e90ff;
+  box-shadow: 0 0 24px #1e90ff99;
+  background: #223a5e;
+  color: #fff;
+}
+.caja.express {
+  border-color: #1e90ff;
+  background: #223a5e;
+}
+.express-label {
+  color: #1e90ff;
+  font-size: 0.8em;
+  margin-left: 8px;
+  font-weight: bold;
+}
+.mejor-label {
+  color: #1e90ff;
+  font-size: 0.8em;
+  margin-left: 10px;
+  font-weight: bold;
+  background: #e6f2ff;
+  border-radius: 6px;
+  padding: 2px 8px;
+}
+.clientes-lista {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 120px;
+  align-items: flex-start;
+  color: #fff;
+}
+.cliente {
+  padding: 10px 16px;
+  font-size: 1.18em;
+  background: #353b47;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 1px 2px #111a;
+  transition: background 0.2s, color 0.2s;
+  min-width: 220px;
+  animation: aparecer 0.5s;
+  color: #fff;
+}
+.cliente.rojo {
+  color: #fff;
+  font-weight: bold;
+  background: #e53935;
+  border: 2px solid #fff;
+  box-shadow: 0 0 12px #e53935cc;
+}
+.icono-persona {
+  font-size: 1.5em;
+  margin-right: 4px;
+}
+.nombre-cliente {
+  font-weight: 500;
+}
+.articulos {
+  color: #888;
+  font-size: 0.95em;
+  margin-left: 4px;
+}
+.tiempo-rojo {
+  margin-left: 8px;
+  color: #fff;
+  font-size: 0.98em;
+  font-weight: bold;
+  background: #e53935;
+  border-radius: 4px;
+  padding: 2px 6px;
+  box-shadow: 0 0 6px #e53935cc;
+}
+@keyframes aparecer {
+  from { opacity: 0; transform: translateY(20px); }
+  to { opacity: 1; transform: translateY(0); }
+}
