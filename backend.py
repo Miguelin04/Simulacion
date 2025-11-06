@@ -61,7 +61,10 @@ def estado():
 def avanzar():
     if supermercado is None:
         return jsonify({"error": "No hay simulación activa"}), 400
-    supermercado.actualizar_simulacion_un_segundo()
+    data = request.get_json(silent=True) or {}
+    pasos = int(data.get('pasos', 1))
+    for _ in range(pasos):
+        supermercado.actualizar_simulacion_un_segundo()
     terminado = supermercado.simulacion_terminada()
     return jsonify({"terminado": terminado})
 
@@ -73,6 +76,7 @@ def agregar_clientes():
     data = request.get_json()
     cantidad = int(data.get('cantidad', 1))
     nombre_caja = data.get('caja')
+    tipo_cajero = data.get('tipo_cajero', None)
     print(f"[DEBUG] Nombre de caja recibido: '{nombre_caja}'")
     # Buscar la caja por nombre
     cajas = supermercado.cajas + [supermercado.caja_express]
@@ -114,6 +118,19 @@ def agregar_clientes():
         return jsonify({'error': 'Caja no encontrada'}), 404
     print(f"[DEBUG] Caja destino final: '{caja_destino.nombre}'")
     # Si el destino es express, usar el método dedicado para asegurar la lógica correcta
+    # Asignar el tipo de cajero si se especifica
+    if tipo_cajero:
+        from cajero import Cajero
+        if tipo_cajero == "Principiante":
+            experiencia = 1
+        elif tipo_cajero == "Normal":
+            experiencia = 2
+        else:
+            experiencia = 3
+        nuevo_cajero = Cajero()
+        nuevo_cajero.experiencia = experiencia
+        nuevo_cajero.multiplicador_velocidad = nuevo_cajero.definir_multiplicador()
+        caja_destino.cajero = nuevo_cajero
     if caja_destino == supermercado.caja_express:
         print("[DEBUG] Asignando clientes a la caja express...")
         asignados = supermercado.asignar_clientes_a_express(cantidad)

@@ -3,9 +3,9 @@
 .caja {
   border: 2.5px solid #eee;
   border-radius: 14px;
-  padding: 18px 18px 12px 18px;
-  margin: 16px 8px;
-  width: 250px;
+  padding: 24px 24px 18px 24px;
+  margin: 20px 12px;
+  width: 320px;
   background: #2d323c;
   box-shadow: 2px 2px 16px #111a;
   display: inline-block;
@@ -50,16 +50,16 @@
   color: #fff;
 }
 .cliente {
-  padding: 6px 10px;
-  font-size: 1.08em;
+  padding: 10px 16px;
+  font-size: 1.18em;
   background: #353b47;
-  border-radius: 6px;
+  border-radius: 8px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 12px;
   box-shadow: 0 1px 2px #111a;
   transition: background 0.2s, color 0.2s;
-  min-width: 180px;
+  min-width: 220px;
   animation: aparecer 0.5s;
   color: #fff;
 }

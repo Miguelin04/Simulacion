@@ -34,7 +34,7 @@ function Caja({ nombre, clientes, esExpress, esMejor, cajero, animando, atendido
             >
               <span className="icono-persona" role="img" aria-label="persona">🧑</span>
               <span className="nombre-cliente">{cliente.nombre}</span>
-              <span className="articulos">({cliente.articulos} art)</span>
+              <span className="articulos">({cliente.articulos}art)</span>
               <span className="tiempo-rojo">⏱ {mostrarTiempo ? tiempoRestante : cliente.tiempo_estimado}s</span>
             </div>
           );
