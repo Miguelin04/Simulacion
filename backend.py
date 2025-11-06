@@ -55,18 +55,30 @@ def simular():
 def estado():
     if supermercado is None:
         return jsonify({"error": "No hay simulación activa"}), 400
-    return jsonify(supermercado.obtener_estado())
+    try:
+        return jsonify(supermercado.obtener_estado())
+    except Exception as e:
+        return jsonify({"error": f"Error al obtener estado: {str(e)}"}), 500
 
 @app.route('/api/avanzar', methods=['POST'])
 def avanzar():
     if supermercado is None:
         return jsonify({"error": "No hay simulación activa"}), 400
-    data = request.get_json(silent=True) or {}
-    pasos = int(data.get('pasos', 1))
-    for _ in range(pasos):
-        supermercado.actualizar_simulacion_un_segundo()
-    terminado = supermercado.simulacion_terminada()
-    return jsonify({"terminado": terminado})
+    try:
+        # Si la simulación ya terminó, no procesar nada y devolver terminado
+        if supermercado.simulacion_terminada():
+            return jsonify({"terminado": True})
+        data = request.get_json(silent=True) or {}
+        pasos = int(data.get('pasos', 1))
+        for _ in range(pasos):
+            if supermercado.simulacion_terminada():
+                # Si termina en medio de los pasos, salir y devolver terminado
+                return jsonify({"terminado": True})
+            supermercado.actualizar_simulacion_un_segundo()
+        terminado = supermercado.simulacion_terminada()
+        return jsonify({"terminado": terminado})
+    except Exception as e:
+        return jsonify({"error": f"Error al avanzar simulación: {str(e)}"}), 500
 
 @app.route('/api/agregar_clientes', methods=['POST'])
 def agregar_clientes():

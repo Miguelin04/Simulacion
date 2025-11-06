@@ -233,15 +233,41 @@ function App() {
     if (!enAnimacion) return;
     timerRef.current = setInterval(async () => {
       // Avanzar la simulación en el backend
-      const pasos = modoRapido ? 20 : 1;
-      await fetch('http://localhost:5000/api/avanzar', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ pasos })
-      });
+      const pasos = modoRapido ? 10 : 1;
+      let avanzarRes, avanzarData;
+      try {
+        avanzarRes = await fetch('http://localhost:5000/api/avanzar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pasos })
+        });
+        avanzarData = await avanzarRes.json();
+      } catch {
+        clearInterval(timerRef.current);
+        setEnAnimacion(false);
+        return;
+      }
+      // Si el backend responde con error, detener animación
+      if (avanzarRes.status !== 200 || avanzarData.error) {
+        clearInterval(timerRef.current);
+        setEnAnimacion(false);
+        return;
+      }
       // Obtener el estado actualizado del backend
-      const estado = await fetch('http://localhost:5000/api/estado');
-      const data = await estado.json();
+      let estado, data;
+      try {
+        estado = await fetch('http://localhost:5000/api/estado');
+        data = await estado.json();
+      } catch {
+        clearInterval(timerRef.current);
+        setEnAnimacion(false);
+        return;
+      }
+      if (estado.status !== 200 || data.error) {
+        clearInterval(timerRef.current);
+        setEnAnimacion(false);
+        return;
+      }
       const todasCajas = [...data.cajas, { ...data.caja_express, esExpress: true }];
       setEstadoAnimado(todasCajas.map((caja) => ({
         clientes: deepClone(caja.en_fila),
@@ -258,7 +284,20 @@ function App() {
         tiemposClientes: caja.en_fila.map(c => c.tiempo_estimado),
         tiempoRojo: caja.cliente_rojo.tiempo_estimado,
       })));
-    }, modoRapido ? 100 : 1000);
+      // Si la simulación terminó, detener el intervalo y mostrar la mejor caja solo una vez
+      if (avanzarData.terminado) {
+        clearInterval(timerRef.current);
+        setEnAnimacion(false);
+        // Mostrar mensaje de la mejor caja solo al finalizar
+        if (data.resumen_comparacion) {
+          const match = data.resumen_comparacion.match(/La mejor caja para el cliente rojo es (.+) con (\d+)s/);
+          if (match) {
+            setMejorCajaRojo(match[1]);
+          }
+        }
+        return;
+      }
+    }, modoRapido ? 200 : 1000);
     return () => clearInterval(timerRef.current);
   }, [enAnimacion, modoRapido]);
 
@@ -415,6 +454,11 @@ function App() {
       {mostrarAnimacion && (
         <div style={{marginTop: '24px', textAlign: 'center', color: '#fff', fontSize: '1.2em'}}>
           <b>Tiempo transcurrido:</b> {tiempo} segundos
+        </div>
+      )}
+      {mejorCajaRojo && (
+        <div style={{marginTop: '32px', textAlign: 'center', color: '#1e90ff', fontSize: '1.4em', fontWeight: 'bold', background: '#181b22', borderRadius: 10, padding: '12px 24px', boxShadow: '0 2px 12px #0008'}}>
+          🏆 La caja más rápida fue: {mejorCajaRojo}
         </div>
       )}
     </div>
