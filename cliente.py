@@ -10,7 +10,7 @@ class Cliente:
     #Constructor de la clase
     def __init__(self, nombre = "Cliente" ):
         self.nombre        = nombre
-        self.num_articulos = random.randint(10, 15) # Ahora el mínimo es 10
+        self.num_articulos = random.randint(10, 15) 
         self.metodo_pago   = ""
         self.articulos     = []
         self.tiempo_total_atencion = 0 # Nuevo: para guardar el resultado final
