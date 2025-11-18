@@ -2,6 +2,7 @@
 import time
 import os
 from Caja import Caja
+from supermercado import Supermercado
 #-------------------------------------------
 
 class Interfaz:
@@ -66,19 +67,50 @@ class Interfaz:
         except ValueError:
             print("Entrada inválida. Usando 5 clientes por defecto.")
             num_clientes = 5
-        
-        mi_caja = Caja(num_clientes)
-        
-        while not mi_caja.simulacion_terminada():
-            self.limpiar_pantalla()
-            self.dibujar_interfaz(mi_caja)
-            mi_caja.actualizar_simulacion_un_segundo()
-            try:
+        # Preguntar opcionalmente cuántas cajas normales usar
+        try:
+            num_cajas = int(input("Ingrese numero de cajas normales (por defecto 3): \n") or 3)
+        except ValueError:
+            num_cajas = 3
+
+        # Crear el supermercado y asignar clientes
+        supermercado = Supermercado(num_clientes, num_cajas=num_cajas)
+        # Asignar clientes de forma aleatoria respetando reglas internas (incluye ajuste por demanda)
+        supermercado.asignar_clientes_random(num_clientes)
+
+        # Bucle principal: actualizar supermercado y dibujar cada caja
+        try:
+            while not supermercado.simulacion_terminada():
+                self.limpiar_pantalla()
+                # Dibujar cajas normales
+                for caja in supermercado.cajas:
+                    self.dibujar_interfaz(caja)
+                    print("\n")
+                # Dibujar caja express
+                print("--- CAJA EXPRESS ---")
+                self.dibujar_interfaz(supermercado.caja_express)
+
+                # Mostrar métricas nuevas: costo total y número de cajas actuales
+                estado = supermercado.obtener_estado()
+                print(f"\nCosto total estimado: {estado.get('costo_total', 0):.2f}")
+                # Mostrar sólo cajas normales (la caja express se muestra por separado)
+                print(f"Cajas en servicio: {estado.get('num_cajas_actuales', len(supermercado.cajas))}")
+
+                # Avanzar un segundo en toda la simulación
+                supermercado.actualizar_simulacion_un_segundo()
                 time.sleep(1)
-            except KeyboardInterrupt:
-                print("\nSimulación interrumpida.")
-                break
+        except KeyboardInterrupt:
+            print("\nSimulación interrumpida.")
+
+        # Al terminar, mostrar resultados consolidados
         self.limpiar_pantalla()
-        self.dibujar_interfaz(mi_caja)
+        for caja in supermercado.cajas:
+            self.dibujar_interfaz(caja)
+            print("\n")
+        print("--- CAJA EXPRESS ---")
+        self.dibujar_interfaz(supermercado.caja_express)
+        estado_final = supermercado.obtener_estado()
         print("\n\n--- SIMULACIÓN TERMINADA ---")
-        print(f"Todos los {len(mi_caja.clientes_atendidos)} clientes fueron atendidos.")
+        total_atendidos = sum(len(c.clientes_atendidos) for c in supermercado.cajas + [supermercado.caja_express])
+        print(f"Todos los {total_atendidos} clientes fueron atendidos.")
+        print(f"Costo total final: {estado_final.get('costo_total', 0):.2f}")

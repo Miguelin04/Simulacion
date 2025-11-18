@@ -1,6 +1,12 @@
 from Caja import Caja
 from cliente import Cliente
 import random
+import datetime
+
+# Nota: Este archivo extiende la simulación original para incluir:
+# - Variación de demanda por día/hora
+# - Registro de utilización del sistema para reglas de apertura de cajas
+# - Cálculo de costos (costo por hora de cajeros, costo de espera y penalizaciones SLA)
 
 class Supermercado:
    
@@ -19,6 +25,8 @@ class Supermercado:
         return len(self.caja_express.clientes_en_fila)
     
     def asignar_clientes_random(self, num_clientes):
+        # Ajustar demanda según día/hora antes de asignar
+        num_clientes = self.ajustar_num_clientes_por_demanda(num_clientes)
         # Asignar clientes de forma aleatoria respetando la lógica de la caja express
         from cajero import Cajero
         for i in range(num_clientes):
@@ -29,11 +37,17 @@ class Supermercado:
             self.todos_los_clientes.append(cliente)
             # Solo puede ir a la express si tiene <=10 artículos y el cajero es Experto o Normal
             puede_express = cliente.num_articulos <= 10 and self.caja_express.cajero.experiencia in [2,3]
-            # Pero como el mínimo es 10, solo clientes con 10 artículos pueden ir a express
+            # Si puede ir a express, lo añadimos a la express; en caso contrario, lo añadimos
+            # a una caja normal aleatoria. Evitar duplicados (no añadir a ambas).
             if puede_express:
                 self.caja_express.clientes_en_fila.append(cliente)
-            # Todos los clientes pueden ir a una caja normal
-            random.choice(self.cajas).clientes_en_fila.append(cliente)
+            else:
+                # Todos los clientes que no vayan a express se asignan a una caja normal
+                if self.cajas:
+                    random.choice(self.cajas).clientes_en_fila.append(cliente)
+                else:
+                    # Si por alguna razón no hay cajas normales, agregar a express como fallback
+                    self.caja_express.clientes_en_fila.append(cliente)
    
     def __init__(self, num_clientes, num_cajas=3):
         self.cajas = [Caja(0, nombre=f"Caja {i+1}") for i in range(num_cajas)]  # Cajas normales
@@ -49,6 +63,45 @@ class Supermercado:
         self.cliente_rojo = Cliente("Cliente Rojo")
         self.cliente_rojo.crear_lista_articulos()
         self.cliente_rojo.metodo_pago = "Efectivo"
+        # --- Parámetros y estado adicionales para la nueva lógica de negocio ---
+        # Día (0=lunes ... 6=domingo) y hora (0-23). Si no se especifica, usar fecha/hora actuales.
+        ahora = datetime.datetime.now()
+        self.dia = ahora.weekday()  # 0..6
+        self.hora = ahora.hour
+        # NOTA: No se generan llegadas automáticas por defecto por segundo.
+        # La entrada de clientes se controla mediante los métodos existentes
+        # (`asignar_clientes_random` o `asignar_clientes_a_express`) y se ajusta
+        # mediante `ajustar_num_clientes_por_demanda` según día/hora.
+        # Registro temporal de utilización (lista de 0..1 valores por segundo)
+        self.utilizacion_registro = []
+        # Parámetros adicionales configurables
+        # Tasa base de llegadas por segundo (si se desea usar llegada automática)
+        self.tasa_base_llegadas_por_segundo = 0.0
+        # Sueldo base por defecto que se aplicará a nuevos cajeros (y puede aplicarse a existentes)
+        # Se ajusta al valor solicitado por el usuario (400 moneda/mes en el análisis entregado).
+        self.default_sueldo_base = 400.0
+        # Asegurar que los cajeros iniciales respeten el sueldo por defecto
+        for caja in self.cajas:
+            try:
+                caja.cajero.sueldo_base = self.default_sueldo_base
+            except Exception:
+                pass
+        try:
+            self.caja_express.cajero.sueldo_base = self.default_sueldo_base
+        except Exception:
+            pass
+        # Umbrales y costos configurables
+        self.max_cajas = 10
+        self.costo_espera_por_cliente = 0.05  # costo por segundo de espera por cliente (valor por defecto)
+        self.sla_umbral = 120.0  # si el tiempo promedio en fila (s) supera este umbral, penalizar
+        self.penalizacion_sla = 50.0  # penalización fija (puede adaptarse a la duración de exceso)
+        # Umbrales para abrir caja automática
+        self.lq_umbral = 5.0  # Lq* : umbral de longitud promedio de colas
+        self.rho_umbral = 0.75  # ρ* : umbral de utilización
+        self.rho_periodo = 30  # periodo (s) sobre el que promediar la utilización
+        # Por defecto, la apertura automática de cajas está deshabilitada.
+        # El usuario puede abrir cajas manualmente mediante la interfaz o un endpoint.
+        self.auto_open_enabled = False
 
     def asignar_clientes(self, num_clientes):
         for i in range(num_clientes):
@@ -59,9 +112,87 @@ class Supermercado:
         # No asignar a ninguna caja aquí
 
     def actualizar_simulacion_un_segundo(self):
+        """
+        Actualizar la simulación un segundo.
+        - Actualiza cada caja (esto internamente acumula horas trabajadas por cajero).
+        - Registra la utilización del sistema para la regla de apertura automática.
+        - Evalúa Lq y utilización promedio y abre nuevas cajas si aplica.
+        """
+        # Actualizar todas las cajas
         for caja in self.cajas:
             caja.actualizar_simulacion_un_segundo()
         self.caja_express.actualizar_simulacion_un_segundo()
+
+        # NOTA: el reloj interno de simulación no avanza la hora/día automáticamente.
+        # Si se desea simular avance temporal, el controlador que use esta clase
+        # puede actualizar `self.dia` y `self.hora` manualmente antes de llamar
+        # a `actualizar_simulacion_un_segundo()` para que `ajustar_num_clientes_por_demanda`
+        # use valores correctos cuando se asignen clientes.
+
+        # Registrar utilización actual: fracción de cajeros ocupados
+        servidores = len(self.cajas) + 1  # normales + express
+        ocupados = 0
+        for caja in self.cajas:
+            if caja.cliente_actual is not None or len(caja.clientes_en_fila) > 0:
+                ocupados += 1
+        if self.caja_express.cliente_actual is not None or len(self.caja_express.clientes_en_fila) > 0:
+            ocupados += 1
+        rho_actual = float(ocupados) / float(max(1, servidores))
+        self.utilizacion_registro.append(rho_actual)
+        # Mantener solo los últimos rho_periodo segundos
+        if len(self.utilizacion_registro) > self.rho_periodo:
+            self.utilizacion_registro.pop(0)
+
+        # Calcular Lq (longitud promedio de colas)
+        longitudes = [len(caja.clientes_en_fila) for caja in self.cajas] + [len(self.caja_express.clientes_en_fila)]
+        lq_promedio = sum(longitudes) / float(len(longitudes)) if longitudes else 0.0
+
+        # Revisar regla de apertura automática
+        try:
+            # Promedio de utilización en el periodo registrado
+            rho_promedio = sum(self.utilizacion_registro) / float(len(self.utilizacion_registro))
+        except ZeroDivisionError:
+            rho_promedio = 0.0
+
+        # Si se supera alguno de los umbrales y la apertura automática está habilitada,
+        # intentar abrir nueva caja. Por defecto está deshabilitado para respetar el
+        # control manual de cajas solicitado por el usuario.
+        if self.auto_open_enabled and (lq_promedio > self.lq_umbral or rho_promedio > self.rho_umbral):
+            self.abrir_nueva_caja_si_necesario()
+
+    def abrir_caja_manual(self):
+        """
+        Abrir una nueva caja manualmente (sin verificar umbrales).
+        Se crea la caja y se rebalancean clientes desde la cola más larga hacia la nueva caja.
+        Devuelve True si se creó correctamente.
+        """
+        try:
+            nueva = Caja(0, nombre=f"Caja {len(self.cajas)+1}")
+            try:
+                nueva.cajero.sueldo_base = self.default_sueldo_base
+            except Exception:
+                pass
+            self.cajas.append(nueva)
+            # Rebalancear similar a la apertura automática
+            if self.cajas:
+                # buscar la caja normal con la cola más larga
+                colas = [(len(c.clientes_en_fila), idx) for idx, c in enumerate(self.cajas[:-1])] if len(self.cajas) > 1 else [(len(self.cajas[0].clientes_en_fila), 0)]
+                if not colas:
+                    origen_idx = 0
+                else:
+                    origen_idx = max(colas, key=lambda x: x[0])[1]
+                origen = self.cajas[origen_idx]
+                num_origen = len(origen.clientes_en_fila)
+                if num_origen > 0:
+                    mover = (num_origen + 1) // 2
+                    for _ in range(mover):
+                        if origen.clientes_en_fila:
+                            cliente_mov = origen.clientes_en_fila.pop(0)
+                            nueva.clientes_en_fila.append(cliente_mov)
+            print(f"[SISTEMA] Apertura manual de nueva caja: {nueva.nombre}")
+            return True
+        except Exception:
+            return False
 
     def simulacion_terminada(self):
         return all(caja.simulacion_terminada() for caja in self.cajas) and self.caja_express.simulacion_terminada()
@@ -82,7 +213,11 @@ class Supermercado:
             'cajas': cajas_estado,
             'caja_express': estado_express,
             'cliente_rojo_articulos': cliente_rojo_articulos,
-            'resumen_comparacion': resumen
+            'resumen_comparacion': resumen,
+            'costo_total': self.calcular_costo_total(),
+            # Devolver solo la cantidad de cajas normales. La caja express
+            # se gestiona por separado para evitar mostrar siempre +1.
+            'num_cajas_actuales': len(self.cajas)
         }
 
     def _estado_caja(self, caja, nombre):
@@ -159,3 +294,140 @@ class Supermercado:
         resumen += "Comparación de tiempos: "
         resumen += ", ".join([f"{nombre}: {tiempo}s" for nombre, tiempo in tiempos])
         return resumen
+
+    # -------------------- Nuevos métodos de negocio añadidos --------------------
+    def ajustar_num_clientes_por_demanda(self, num_clientes, dia=None, hora=None):
+        """
+        Ajusta la cantidad de clientes de entrada según el día y la franja horaria.
+        Reglas implementadas:
+        - viernes (4): +5%
+        - sábado (5): +10%
+        - domingo (6): +15%
+        - entre 12:00 y 14:00 (12 <= hora < 14): +2% adicional
+        Devuelve un entero con el número ajustado de clientes.
+        """
+        dia = self.dia if dia is None else dia
+        hora = self.hora if hora is None else hora
+        incremento = 0.0
+        if dia == 4:
+            incremento += 0.05
+        elif dia == 5:
+            incremento += 0.10
+        elif dia == 6:
+            incremento += 0.15
+        # Franja horaria de mayor demanda
+        if 12 <= hora < 14:
+            incremento += 0.02
+        num_ajustado = int(round(num_clientes * (1.0 + incremento)))
+        return max(0, num_ajustado)
+
+    def calcular_tiempo_total_en_filas(self):
+        """
+        Calcula el tiempo total (en segundos) que todos los clientes en fila
+        aún deben ser atendidos, usando las estimaciones actuales.
+        """
+        total = 0
+        # Sumar tiempos estimados en cajas normales
+        for caja in self.cajas + [self.caja_express]:
+            # incluir cliente actual si existe
+            fila = caja.clientes_en_fila + ([caja.cliente_actual] if caja.cliente_actual else [])
+            for cliente in fila:
+                if cliente:
+                    tiempo = cliente.calcular_tiempo_atencion(
+                        caja.cajero.multiplicador_velocidad,
+                        experiencia_cajero=caja.cajero.experiencia,
+                        metodo_pago=cliente.metodo_pago
+                    )
+                    total += tiempo
+        return total
+
+    def calcular_costo_total(self):
+        """
+        Calcula el costo total del supermercado según la fórmula:
+        costo_total = sum(costo_por_hora de cada cajero) + (costo_espera_por_cliente * tiempo_en_filas)
+                     + penalización_SLA si el tiempo promedio supera el umbral
+        """
+        # 1) Sumatoria de costo_por_hora de cada cajero
+        suma_costos_hora = 0.0
+        for caja in self.cajas + [self.caja_express]:
+            try:
+                suma_costos_hora += caja.cajero.costo_por_hora()
+            except Exception:
+                # Si el cajero no tiene el método, ignorar y continuar
+                pass
+
+        # 2) Costo de espera: costo_espera_por_cliente * tiempo total en filas
+        tiempo_en_filas = self.calcular_tiempo_total_en_filas()
+        costo_espera = float(self.costo_espera_por_cliente) * float(tiempo_en_filas)
+
+        # 3) Penalización SLA: si el tiempo promedio por cliente en fila supera sla_umbral
+        # Calculamos tiempo promedio como tiempo_en_filas / numero_clientes_en_fila
+        num_clientes_en_fila = sum(len(caja.clientes_en_fila) for caja in self.cajas + [self.caja_express])
+        penalizacion = 0.0
+        if num_clientes_en_fila > 0:
+            tiempo_promedio = float(tiempo_en_filas) / float(num_clientes_en_fila)
+            if tiempo_promedio > float(self.sla_umbral):
+                penalizacion = float(self.penalizacion_sla)
+
+        costo_total = suma_costos_hora + costo_espera + penalizacion
+        return costo_total
+
+    def abrir_nueva_caja_si_necesario(self):
+        """
+        Aplica la regla de negocio para abrir una nueva caja si:
+        - la longitud promedio de colas Lq supera `self.lq_umbral`,
+          o
+        - la utilización promedio ρ en el periodo supere `self.rho_umbral`.
+        Solo abre una caja si no se excede `self.max_cajas`.
+        """
+        # Contar sólo las cajas normales al comprobar el límite de `max_cajas`.
+        # La caja express no se cuenta aquí para evitar incrementar siempre en +1.
+        total_cajas_actuales = len(self.cajas)
+        if total_cajas_actuales >= self.max_cajas:
+            return False
+
+        # Calcular Lq promedio actual
+        longitudes = [len(caja.clientes_en_fila) for caja in self.cajas] + [len(self.caja_express.clientes_en_fila)]
+        lq_promedio = sum(longitudes) / float(len(longitudes)) if longitudes else 0.0
+
+        # Calcular rho promedio en el registro
+        rho_promedio = 0.0
+        if self.utilizacion_registro:
+            rho_promedio = sum(self.utilizacion_registro) / float(len(self.utilizacion_registro))
+
+        # Si alguno de los umbrales se supera, abrir una caja
+        if lq_promedio > self.lq_umbral or rho_promedio > self.rho_umbral:
+            # Crear nueva caja (con 0 clientes inicialmente)
+            nueva = Caja(0, nombre=f"Caja {len(self.cajas)+1}")
+            # Su cajero tendrá sueldo_base por defecto; si se desea, el llamador puede modificarlo
+            try:
+                nueva.cajero.sueldo_base = self.default_sueldo_base
+            except Exception:
+                pass
+            self.cajas.append(nueva)
+            # Registrar un mensaje por consola (integración con interfaz simplificada)
+            print(f"[SISTEMA] Apertura automática de nueva caja: {nueva.nombre} (Lq={lq_promedio:.2f}, rho={rho_promedio:.2f})")
+            # Rebalancear clientes: mover la mitad (ceil) de la cola más larga hacia la nueva caja
+            try:
+                # Excluir express al buscar la cola más larga
+                if self.cajas:
+                    colas = [(len(c.clientes_en_fila), idx) for idx, c in enumerate(self.cajas[:-1])] if len(self.cajas) > 1 else [(len(self.cajas[0].clientes_en_fila), 0)]
+                    # Si no hay cajas normales registradas correctamente, tomar la primera
+                    if not colas:
+                        origen_idx = 0
+                    else:
+                        origen_idx = max(colas, key=lambda x: x[0])[1]
+                    origen = self.cajas[origen_idx]
+                    num_origen = len(origen.clientes_en_fila)
+                    if num_origen > 0:
+                        mover = (num_origen + 1) // 2  # mitad redondeando arriba
+                        # Mover los primeros `mover` clientes de la cola origen a la nueva caja
+                        for _ in range(mover):
+                            if origen.clientes_en_fila:
+                                cliente_mov = origen.clientes_en_fila.pop(0)
+                                nueva.clientes_en_fila.append(cliente_mov)
+                        print(f"[SISTEMA] Rebalanceo: movidos {mover} clientes de {origen.nombre} a {nueva.nombre}")
+            except Exception:
+                pass
+            return True
+        return False

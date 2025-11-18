@@ -8,14 +8,45 @@ app = Flask(__name__)
 CORS(app)
 supermercado = None
 
+
+def _get_param(name, default=None, cast=None):
+    """
+    Obtener un parámetro de la request sin asumir JSON.
+    Prioriza: form/args (`request.values`), luego JSON (si llega), y finalmente el valor por defecto.
+    Si `cast` es una función la aplica al valor antes de devolver.
+    """
+    # request.values contiene args y form (querystring + form-encoded)
+    val = None
+    try:
+        if name in request.values:
+            val = request.values.get(name)
+        else:
+            # intentar JSON solo como fallback
+            j = request.get_json(silent=True)
+            if j and name in j:
+                val = j.get(name)
+    except Exception:
+        val = None
+    if val is None:
+        return default
+    if cast:
+        try:
+            return cast(val)
+        except Exception:
+            return default
+    return val
+
+
 @app.route('/api/simular_random', methods=['POST'])
 def simular_random():
     global supermercado
-    data = request.get_json()
-    num_clientes = data.get('num_clientes', 15)
-    supermercado = Supermercado(0)
+    # No asumimos JSON: leer desde form/querystring o JSON como fallback
+    num_clientes = _get_param('num_clientes', 15, cast=int)
+    num_cajas = _get_param('num_cajas', 3, cast=int)
+    supermercado = Supermercado(0, num_cajas=num_cajas)
     supermercado.asignar_clientes_random(num_clientes)
     return jsonify({"ok": True})
+
 
 # Endpoint para simulación manual (solo estructura vacía)
 @app.route('/api/simular_manual', methods=['POST'])
@@ -31,25 +62,33 @@ def simular_manual():
         if supermercado.caja_express.clientes_en_fila or supermercado.caja_express.cliente_actual:
             return False
         return True
-    global supermercado
+    # Permitir especificar número de cajas al iniciar manualmente (form/querystring)
+    num_cajas = _get_param('num_cajas', 3, cast=int)
     if supermercado is None or cajas_vacias():
-        supermercado = Supermercado(0)
+        supermercado = Supermercado(0, num_cajas=num_cajas)
     return jsonify({"ok": True})
-from flask import Flask, jsonify, request
-from flask_cors import CORS
-from supermercado import Supermercado
-from cliente import Cliente
-import random
+
 
 @app.route('/api/simular', methods=['POST'])
 def simular():
     global supermercado
-    data = request.get_json()
-    num_clientes = data.get('num_clientes', 15)
-    supermercado = Supermercado(0)
+    # Leer parámetros preferentemente desde form/querystring
+    num_clientes = _get_param('num_clientes', 15, cast=int)
+    num_cajas = _get_param('num_cajas', 3, cast=int)
+    supermercado = Supermercado(0, num_cajas=num_cajas)
+    # Si se proporciona una tasa de llegadas, almacenarla en la instancia
+    tasa_val = _get_param('tasa', None)
+    if tasa_val is not None:
+        try:
+            supermercado.tasa_base_llegadas_por_segundo = float(tasa_val)
+        except Exception:
+            supermercado.tasa_base_llegadas_por_segundo = 0.0
     if num_clientes > 0:
         supermercado.asignar_clientes_random(num_clientes)
     return jsonify({"ok": True})
+
+
+# NOTE: Endpoints to configure backend (config, sueldo_base) removed to keep API minimal
 
 @app.route('/api/estado', methods=['GET'])
 def estado():
@@ -60,6 +99,80 @@ def estado():
     except Exception as e:
         return jsonify({"error": f"Error al obtener estado: {str(e)}"}), 500
 
+
+@app.route('/api/abrir_caja_manual', methods=['POST'])
+def abrir_caja_manual():
+    global supermercado
+    # Si no hay simulación activa, crear una con valores por defecto
+    if supermercado is None:
+        # Crear supermercado vacío con 3 cajas normales por defecto
+        supermercado = Supermercado(0, num_cajas=3)
+    # número de cajas a abrir (por defecto 1)
+    num = _get_param('num', 1, cast=int)
+    abiertas = 0
+    for _ in range(max(0, num)):
+        try:
+            ok = supermercado.abrir_caja_manual()
+            if ok:
+                abiertas += 1
+        except Exception:
+            pass
+    return jsonify({'ok': True, 'abiertas': abiertas})
+
+
+@app.route('/api/set_cajero', methods=['POST'])
+def set_cajero():
+    """Actualizar el tipo de cajero de una caja por nombre.
+    Parámetros esperados (form/querystring):
+    - nombre: nombre de la caja (p.ej. 'Caja 1' o 'Caja Express')
+    - tipo: 'Principiante'|'Normal'|'Experto'
+    - sueldo (opcional): valor numérico para sueldo_base
+    """
+    global supermercado
+    if supermercado is None:
+        return jsonify({'error': 'No hay simulación activa'}), 400
+    nombre = _get_param('nombre', None)
+    tipo = _get_param('tipo', None)
+    sueldo = _get_param('sueldo', None)
+    if not nombre or not tipo:
+        return jsonify({'error': 'Parámetros incompletos (nombre, tipo)'}), 400
+    # localizar caja similar a /api/agregar_clientes
+    cajas = supermercado.cajas + [supermercado.caja_express]
+    nombre_lower = nombre.strip().lower()
+    caja_destino = None
+    for idx, caja in enumerate(cajas):
+        nombre_caja_backend = str(getattr(caja, 'nombre', '')).strip().lower()
+        if nombre_lower == nombre_caja_backend:
+            caja_destino = caja
+            break
+        if idx < len(supermercado.cajas):
+            if nombre_lower == f"caja {idx+1}":
+                caja_destino = caja
+                break
+        if idx == len(cajas)-1 and nombre_lower in ["caja express", "express"]:
+            caja_destino = caja
+            break
+    if caja_destino is None:
+        return jsonify({'error': 'Caja no encontrada'}), 404
+    # Mapear tipo a experiencia
+    if tipo == 'Principiante':
+        experiencia = 1
+    elif tipo == 'Normal':
+        experiencia = 2
+    else:
+        experiencia = 3
+    from cajero import Cajero
+    nuevo = Cajero()
+    nuevo.experiencia = experiencia
+    nuevo.multiplicador_velocidad = nuevo.definir_multiplicador()
+    try:
+        if sueldo is not None:
+            nuevo.sueldo_base = float(sueldo)
+    except Exception:
+        pass
+    caja_destino.cajero = nuevo
+    return jsonify({'ok': True, 'caja': getattr(caja_destino, 'nombre', None)})
+
 @app.route('/api/avanzar', methods=['POST'])
 def avanzar():
     if supermercado is None:
@@ -68,8 +181,7 @@ def avanzar():
         # Si la simulación ya terminó, no procesar nada y devolver terminado
         if supermercado.simulacion_terminada():
             return jsonify({"terminado": True})
-        data = request.get_json(silent=True) or {}
-        pasos = int(data.get('pasos', 1))
+        pasos = _get_param('pasos', 1, cast=int)
         for _ in range(pasos):
             if supermercado.simulacion_terminada():
                 # Si termina en medio de los pasos, salir y devolver terminado
@@ -85,10 +197,10 @@ def agregar_clientes():
     global supermercado
     if supermercado is None:
         return jsonify({'error': 'No hay simulación activa'}), 400
-    data = request.get_json()
-    cantidad = int(data.get('cantidad', 1))
-    nombre_caja = data.get('caja')
-    tipo_cajero = data.get('tipo_cajero', None)
+    # No usamos JSON por convención: leer desde form/querystring
+    cantidad = _get_param('cantidad', 1, cast=int)
+    nombre_caja = _get_param('caja', None)
+    tipo_cajero = _get_param('tipo_cajero', None)
     print(f"[DEBUG] Nombre de caja recibido: '{nombre_caja}'")
     # Buscar la caja por nombre
     cajas = supermercado.cajas + [supermercado.caja_express]

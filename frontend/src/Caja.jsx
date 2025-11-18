@@ -2,12 +2,14 @@ import React from 'react';
 import './Caja.css';
 
 
-function Caja({ nombre, clientes, esExpress, esMejor, cajero, animando, atendidos = [], tiempoRestante }) {
+function Caja({ nombre, clientes = [], esExpress, esMejor, cajero, animando, atendidos = [], tiempoRestante }) {
   // Si está animando, solo mostrar los clientes que aún no han sido atendidos
   // Ocultar el cliente rojo si la simulación no está animando y solo hay el cliente rojo
+  // Asegurarse de que `clientes` siempre sea un arreglo para evitar errores
+  // cuando el backend o props no lo proveen (evita "Cannot read properties of undefined (reading 'filter')").
   let clientesEnFila = clientes;
   if (!animando) {
-    clientesEnFila = clientes.filter(c => c.nombre !== 'Cliente Rojo');
+    clientesEnFila = (clientes || []).filter(c => c.nombre !== 'Cliente Rojo');
   }
   const atendidosCount = animando ? atendidos.length : 0;
   // Mostrar el cliente que está siendo atendido con el tiempo restante
@@ -29,9 +31,9 @@ function Caja({ nombre, clientes, esExpress, esMejor, cajero, animando, atendido
           const mostrarTiempo = animando && idx === atendidosCount && typeof tiempoRestante === 'number';
           return (
             <div
-              key={idx}
-              className={`cliente ${cliente.es_rojo ? 'rojo' : ''}`}
-            >
+                  key={idx}
+                  className={`cliente ${cliente.es_rojo ? 'rojo' : ''} ${cliente.agregado_por_demanda ? 'agregado-demanda' : ''}`}
+                >
               <span className="icono-persona" role="img" aria-label="persona">🧑</span>
               <span className="nombre-cliente">{cliente.nombre}</span>
               <span className="articulos">({cliente.articulos}art)</span>
