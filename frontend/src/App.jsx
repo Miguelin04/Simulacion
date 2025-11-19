@@ -409,13 +409,20 @@ function App() {
 
   const handleSelectHour = (h) => {
     setSelectedHour(h);
-    // Si hora pico: reactivar todas (comportamiento previo)
-    if (h >= 12 && h <= 14) {
-      wakeBoxesIfPeak(h);
+    // Nueva regla de descansos automáticos:
+    // - Si selecciona 12:00 => Caja 2 y todas las cajas adicionales (índice >=1) descansan (12-13).
+    // - Si selecciona 13:00 => Caja 1 y Caja Express descansan (13-14).
+    // - Otras horas => ninguna caja en descanso automático.
+    if (h === 12) {
+      setCajas(prev => prev.map((c, idx) => ({ ...c, descansando: idx >= 1 })));
+      setCajaExpress(prev => prev ? { ...prev, descansando: false } : prev);
+    } else if (h === 13) {
+      setCajas(prev => prev.map((c, idx) => ({ ...c, descansando: idx === 0 })));
+      setCajaExpress(prev => prev ? { ...prev, descansando: true } : prev);
     } else {
-      // aplicar descansos automáticos según `descansoHora` de cada caja
-      setCajas(prev => prev.map(c => ({ ...c, descansando: c.descansoHora !== null && c.descansoHora === h })));
-      setCajaExpress(prev => prev ? { ...prev, descansando: (prev.descansoHora !== null && prev.descansoHora === h) } : prev);
+      // no descansos automáticos fuera de las horas 12/13
+      setCajas(prev => prev.map(c => ({ ...c, descansando: false })));
+      setCajaExpress(prev => prev ? { ...prev, descansando: false } : prev);
     }
   };
 
@@ -933,26 +940,9 @@ function App() {
                       <option value="Principiante">Principiante</option>
                       <option value="Experto">Experto</option>
                     </select>
-                    <label style={{color:'#fff'}}>Hora descanso:</label>
-                    <select value={caja.descansoHora === null ? '' : caja.descansoHora} onChange={e => handleSetDescansoHora(caja.nombre, e.target.value === '' ? null : Number(e.target.value))} style={{padding: '6px 8px', borderRadius: 6}}>
-                      <option value="">--</option>
-                      {Array.from({length:13},(_,i)=>i+8).map(h => <option key={h} value={h}>{h}:00</option>)}
-                    </select>
-                    <button
-                      onClick={() => handleToggleDescanso(caja.nombre, !caja.descansando)}
-                      style={{
-                        padding: '6px 10px',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        background: caja.descansando ? '#ff5555' : '#2ecc71',
-                        color: '#fff',
-                        fontWeight: 'bold'
-                      }}
-                      title={caja.descansando ? 'Caja en descanso (clic para activar)' : 'Caja activa (clic para poner en descanso)'}
-                    >
+                    <div style={{padding: '6px 10px', borderRadius: 8, fontWeight:'bold', color: caja.descansando ? '#ffbaba' : '#baffc9', background: caja.descansando ? '#33111144' : 'transparent'}}>
                       {caja.descansando ? 'Descansando' : 'Disponible'}
-                    </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -998,28 +988,9 @@ function App() {
                     <option value="Principiante">Principiante</option>
                     <option value="Experto">Experto</option>
                   </select>
-                  <label style={{color:'#fff'}}>Hora descanso:</label>
-                  <select value={cajaExpress.descansoHora === null ? '' : cajaExpress.descansoHora} onChange={e => handleSetDescansoHora(cajaExpress.nombre, e.target.value === '' ? null : Number(e.target.value))} style={{padding: '6px 8px', borderRadius: 6}}>
-                    <option value="">--</option>
-                    {Array.from({length:13},(_,i)=>i+8).map(h => <option key={h} value={h}>{h}:00</option>)}
-                  </select>
-                  <label style={{color:'#fff', display:'flex', alignItems:'center', gap:6}}>
-                    <button
-                      onClick={() => handleToggleDescanso(cajaExpress.nombre, !cajaExpress.descansando)}
-                      style={{
-                        padding: '6px 10px',
-                        borderRadius: 8,
-                        border: 'none',
-                        cursor: 'pointer',
-                        background: cajaExpress.descansando ? '#ff5555' : '#2ecc71',
-                        color: '#fff',
-                        fontWeight: 'bold'
-                      }}
-                      title={cajaExpress.descansando ? 'Caja Express en descanso (clic para activar)' : 'Caja Express activa (clic para poner en descanso)'}
-                    >
-                      {cajaExpress.descansando ? 'Descansando' : 'Disponible'}
-                    </button>
-                  </label>
+                  <div style={{padding: '6px 10px', borderRadius: 8, fontWeight:'bold', color: cajaExpress.descansando ? '#ffbaba' : '#baffc9', background: cajaExpress.descansando ? '#33111144' : 'transparent'}}>
+                    {cajaExpress.descansando ? 'Descansando' : 'Disponible'}
+                  </div>
                 </div>
               </div>
             )}
