@@ -11,6 +11,7 @@ class Articulo:
         #random se usa para simular la variabilidad en los tiempos
         self.tiempo_escaneo     = random.randint(1, 5)
         self.tiempo_empaquetado = random.randint(1, 5)
+        #precio
 
 
     #to_str para la presentación del objeto en la consola (posiblemente lo cambie)

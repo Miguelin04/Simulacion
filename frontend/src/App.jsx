@@ -33,7 +33,9 @@ function App() {
       clientes_en_fila: [],
       cliente_actual: null,
       tiempo_restante_cliente_actual: 0,
-      clientes_atendidos: []
+      clientes_atendidos: [],
+      descansando: false,
+      descansoHora: null
     });
 
     const cajasInit = [crearCajaLocal('Caja 1'), crearCajaLocal('Caja 2'), crearCajaLocal('Caja 3')];
@@ -46,6 +48,9 @@ function App() {
   // Nueva función: asignar clientes manualmente y simular
   const handleIniciarManual = async () => {
     setSimulando(true);
+    // Si estamos en hora pico, reactivar cajas para que todas atiendan
+    wakeBoxesIfPeak(selectedHour);
+    setLastCostoTotal(0);
     setTiempo(0);
     clearInterval(timerRef.current);
     setComparacionRojo([]);
@@ -71,41 +76,72 @@ function App() {
     // Aplicar entradas manuales (ajustando por día/hora seleccionados)
     const cajasCopy = [...cajas];
     const cajaExpressCopy = cajaExpress ? { ...cajaExpress } : null;
-    const extras = [];
+    // Si hay una caja seleccionada en la tabla, calcular referencia para usar como destino
+    const destinoSeleccionado = cajaSeleccionada ? (cajasCopy.find(c => c.nombre === cajaSeleccionada) || (cajaExpressCopy && cajaExpressCopy.nombre === cajaSeleccionada ? cajaExpressCopy : null)) : null;
+    // Calcular multiplicador y cantidades ajustadas por cada input, pero NO asignar extras todavía
+    const multManual = computeEffectiveMultiplier(selectedDay, selectedHour);
+    const baseAssignments = []; // { destinoName, baseCount }
+    let totalBase = 0;
+    let totalAjustado = 0;
     for (const nombreCaja in clientesPorCaja) {
-      const cantidad = Number.parseInt(clientesPorCaja[nombreCaja] || '0', 10);
-      const cantidadAjustada = Math.max(0, Math.round(cantidad * demandaMultiplier(selectedDay, selectedHour)));
-      if (cantidadAjustada > 0) {
-        // buscar caja por nombre
-        let destino = cajasCopy.find(c => c.nombre === nombreCaja);
-        if (!destino && cajaExpressCopy && cajaExpressCopy.nombre === nombreCaja) destino = cajaExpressCopy;
-        if (destino) {
-          for (let i=0;i<cantidadAjustada;i++) {
-            const isExtra = i >= cantidad; // los clientes por encima del valor ingresado fueron añadidos por el multiplicador
-            const clienteLocal = crearClienteLocal(`${nombreCaja}_Cliente_${i+1}`, isExtra);
-            destino.clientes_en_fila.push(clienteLocal);
-            if (isExtra) extras.push(clienteLocal);
-          }
+      const cantidad = Number.parseInt(clientesPorCaja[nombreCaja] || '0', 10) || 0;
+      const cantidadAjustada = Math.max(0, Math.round(cantidad * multManual));
+      totalBase += cantidad;
+      totalAjustado += cantidadAjustada;
+      baseAssignments.push({ nombre: nombreCaja, base: cantidad, ajustada: cantidadAjustada });
+    }
+    // Asignar las cantidades base a sus destinos (respetando cajaSeleccionada y descansos)
+    for (const asg of baseAssignments) {
+      const { nombre, base } = asg;
+      let destino = destinoSeleccionado || cajasCopy.find(c => c.nombre === nombre);
+      if (!destino && cajaExpressCopy && cajaExpressCopy.nombre === nombre) destino = cajaExpressCopy;
+      for (let i = 0; i < base; i++) {
+        const clienteLocal = crearClienteLocal(`${nombre}_Cliente_${i+1}`, false);
+        if (destino && destino.descansando) {
+          const alternativa = cajasCopy.find(cc => !cc.descansando && cc.nombre !== destino.nombre);
+          if (alternativa) alternativa.clientes_en_fila.push(clienteLocal);
+          else if (cajaExpressCopy && !cajaExpressCopy.descansando) cajaExpressCopy.clientes_en_fila.push(clienteLocal);
+        } else if (destino) {
+          destino.clientes_en_fila.push(clienteLocal);
         }
       }
       // Si hay selección de tipo de cajero, actualizar multiplicador
-      const tipoCajero = cajeroPorCaja[nombreCaja];
+      const tipoCajero = cajeroPorCaja[nombre];
       if (tipoCajero) {
-        let destino = cajasCopy.find(c => c.nombre === nombreCaja);
-        if (!destino && cajaExpressCopy && cajaExpressCopy.nombre === nombreCaja) destino = cajaExpressCopy;
-        if (destino) {
+        let dest = cajasCopy.find(c => c.nombre === nombre);
+        if (!dest && cajaExpressCopy && cajaExpressCopy.nombre === nombre) dest = cajaExpressCopy;
+        if (dest) {
           let expRaw = 2;
           if (tipoCajero === 'Principiante') expRaw = 1;
           else if (tipoCajero === 'Normal') expRaw = 2;
           else expRaw = 3;
-          destino.cajero.experiencia = tipoCajero;
-          destino.cajero.experiencia_raw = expRaw;
-          if (expRaw === 1) destino.cajero.multiplicador = 1.5;
-          else if (expRaw === 2) destino.cajero.multiplicador = 1.0;
-          else destino.cajero.multiplicador = 0.7;
+          dest.cajero.experiencia = tipoCajero;
+          dest.cajero.experiencia_raw = expRaw;
+          dest.cajero.multiplicador = expRaw === 1 ? 1.5 : expRaw === 2 ? 1.0 : 0.7;
         }
       }
     }
+    // Distribuir los extras (si existen) equitativamente entre las cajas disponibles
+    const extrasTotal = Math.max(0, totalAjustado - totalBase);
+    if (extrasTotal > 0) {
+      const disponibles = [...cajasCopy.filter(c => !c.descansando)];
+      if (cajaExpressCopy && !cajaExpressCopy.descansando) disponibles.push(cajaExpressCopy);
+      const countDisp = disponibles.length;
+      if (countDisp > 0) {
+        const perCaja = Math.floor(extrasTotal / countDisp);
+        let remainder = extrasTotal % countDisp;
+        for (let idx = 0; idx < disponibles.length; idx++) {
+          const dest = disponibles[idx];
+          let toAdd = perCaja + (remainder > 0 ? 1 : 0);
+          if (remainder > 0) remainder -= 1;
+          for (let k = 0; k < toAdd; k++) {
+            dest.clientes_en_fila.push(crearClienteLocal(`${dest.nombre}_Extra_${k+1}`, true));
+          }
+        }
+      }
+    }
+    // Asegurar que Cliente Rojo quede al final de cada cola
+    ensureRojoAtEndForAll(cajasCopy, cajaExpressCopy);
     setCajas(cajasCopy);
     if (cajaExpressCopy) setCajaExpress(cajaExpressCopy);
     setSimulacionActiva(true);
@@ -113,26 +149,29 @@ function App() {
       setComparacionRojo([]);
       setMejorCajaRojo(null);
     // Preparar estado animado inicial a partir de cajas locales
-    // Replicar extras a todas las cajas normales y a express si aplica
-    if (extras.length > 0) {
-      for (const extra of extras) {
-        for (const c of cajasCopy) {
-          c.clientes_en_fila.push(deepClone(extra));
-        }
-        if (cajaExpressCopy) {
-          if (extra.articulos <= 10) {
-            cajaExpressCopy.clientes_en_fila.push(deepClone(extra));
-          }
+    // Los extras se mantienen únicamente en la caja destino donde se crearon.
+    // Agregar Cliente Rojo: si hay una caja seleccionada, añadirlo ahí; si no, añadirlo en las cajas objetivo ingresadas
+    const targetNames = Object.keys(clientesPorCaja).filter(n => Number.parseInt(clientesPorCaja[n] || '0', 10) > 0);
+    if (cajaSeleccionada) {
+      const destinoRojo = destinoSeleccionado;
+      if (destinoRojo && !destinoRojo.descansando) destinoRojo.clientes_en_fila.push(crearClienteLocal('Cliente Rojo', false));
+      else {
+        const alternativa = cajasCopy.find(cc => !cc.descansando);
+        if (alternativa) alternativa.clientes_en_fila.push(crearClienteLocal('Cliente Rojo', false));
+        else if (cajaExpressCopy && !cajaExpressCopy.descansando) cajaExpressCopy.clientes_en_fila.push(crearClienteLocal('Cliente Rojo', false));
+      }
+    } else if (targetNames.length > 0) {
+      for (const name of targetNames) {
+        let destino = cajasCopy.find(c => c.nombre === name);
+        if (!destino && cajaExpressCopy && cajaExpressCopy.nombre === name) destino = cajaExpressCopy;
+        if (destino && !destino.descansando) {
+          destino.clientes_en_fila.push(crearClienteLocal('Cliente Rojo', false));
+        } else {
+          const alternativa = cajasCopy.find(cc => !cc.descansando);
+          if (alternativa) alternativa.clientes_en_fila.push(crearClienteLocal('Cliente Rojo', false));
+          else if (cajaExpressCopy && !cajaExpressCopy.descansando) cajaExpressCopy.clientes_en_fila.push(crearClienteLocal('Cliente Rojo', false));
         }
       }
-    }
-    // Añadir Cliente Rojo al final de cada cola
-    for (const c of cajasCopy) {
-      c.clientes_en_fila.push(crearClienteLocal('Cliente Rojo', false));
-    }
-    if (cajaExpressCopy) {
-      // cliente rojo para express con menos artículos
-      cajaExpressCopy.clientes_en_fila.push({ ...crearClienteLocal('Cliente Rojo', false), articulos: 8, es_rojo: true });
     }
 
     const todasLocal = [...(cajasCopy || []), ...(cajaExpressCopy ? [{ ...cajaExpressCopy, esExpress: true }] : [])];
@@ -160,6 +199,8 @@ function App() {
   const [clientesPorCaja, setClientesPorCaja] = useState({});
   // Estado para tipo de cajero por caja
   const [cajeroPorCaja, setCajeroPorCaja] = useState({});
+  // Estado para bases aleatorias de preview cuando no hay input manual
+  const [previewBases, setPreviewBases] = useState({});
 
 
   // Detener simulación manualmente
@@ -171,6 +212,8 @@ function App() {
     setMejorCajaRojo(null);
     setEstadoAnimado([]);
     setTiempo(0);
+    // guardar el costo final cuando se detiene
+    setLastCostoTotal(calcularCostoTotalLocal());
     // Reiniciar a cajas iniciales: volver a inicializar según useEffect original
     // (simplemente limpiar filas)
     setCajas(prev => prev.map(c => ({ ...c, clientes_en_fila: [], cliente_actual: null, clientes_atendidos: [], tiempo_restante_cliente_actual: 0 })));
@@ -227,8 +270,46 @@ function App() {
     }
   }
 
+  const handleToggleDescanso = (nombreCaja, valor) => {
+    setCajas(prev => prev.map(c => c.nombre === nombreCaja ? { 
+      ...c,
+      descansando: valor,
+      // si ponemos en descanso, limpiar la fila y el cliente actual
+      clientes_en_fila: valor ? [] : c.clientes_en_fila,
+      cliente_actual: valor ? null : c.cliente_actual,
+      tiempo_restante_cliente_actual: valor ? 0 : c.tiempo_restante_cliente_actual,
+    } : c));
+    setCajaExpress(prev => {
+      if (!prev) return prev;
+      if (prev.nombre === nombreCaja) return { 
+        ...prev,
+        descansando: valor,
+        clientes_en_fila: valor ? [] : prev.clientes_en_fila,
+        cliente_actual: valor ? null : prev.cliente_actual,
+        tiempo_restante_cliente_actual: valor ? 0 : prev.tiempo_restante_cliente_actual,
+        descansoHora: valor ? prev.descansoHora : prev.descansoHora,
+      };
+      return prev;
+    });
+  }
+
+  // Establecer hora de descanso para una caja (null para none)
+  const handleSetDescansoHora = (nombreCaja, hora) => {
+    setCajas(prev => prev.map(c => c.nombre === nombreCaja ? { ...c, descansoHora: hora, descansando: (hora !== null && hora === selectedHour) } : c));
+    setCajaExpress(prev => {
+      if (!prev) return prev;
+      if (prev.nombre === nombreCaja) {
+        const nuevaHora = hora;
+        return { ...prev, descansoHora: nuevaHora, descansando: (nuevaHora !== null && nuevaHora === selectedHour) };
+      }
+      return prev;
+    });
+  };
+
   const [cajas, setCajas] = useState([]);
   const [cajaExpress, setCajaExpress] = useState(null);
+  const [cajaSeleccionada, setCajaSeleccionada] = useState(null);
+  const [lastCostoTotal, setLastCostoTotal] = useState(0);
   const utilizacionRegistroRef = useRef([]);
   const cajasRef = useRef(cajas);
   const cajaExpressRef = useRef(cajaExpress);
@@ -264,18 +345,79 @@ function App() {
   // Mapear JS getDay() (0=domingo,1=lunes...) a 0=Lunes .. 6=Domingo
   const defaultDay = (now.getDay() + 6) % 7;
   const [selectedDay, setSelectedDay] = useState(defaultDay);
-  const [selectedHour, setSelectedHour] = useState(now.getHours());
+  // Asegurar que la hora inicial esté dentro del rango operativo 08..20
+  const defaultHour = Math.min(20, Math.max(8, now.getHours()));
+  const [selectedHour, setSelectedHour] = useState(defaultHour);
   // Helper: devuelve el multiplicador de demanda según día/hora seleccionados
   const demandaMultiplier = (day, hour) => {
     // day: 0=Lunes ... 6=Domingo
+    // Aplicar solo dentro del horario operativo 08:00-20:00
+    if (hour < 8 || hour > 20) return 1.0;
     let incremento = 0.0;
     if (day === 4) incremento += 0.05; // viernes
     else if (day === 5) incremento += 0.10; // sábado
     else if (day === 6) incremento += 0.15; // domingo
-    if (hour >= 12 && hour < 14) incremento += 0.02; // hora punta 12:00-13:59
+    // hora punta: incluir 12,13 y 14
+    if (hour >= 12 && hour <= 14) incremento += 0.30;
     return 1 + incremento;
   };
+
+  // Si la hora seleccionada es pico, reactivar todas las cajas (no en descanso)
+  const wakeBoxesIfPeak = (hour) => {
+    if (hour >= 12 && hour <= 14) {
+      setCajas(prev => prev.map(c => ({ ...c, descansando: false })));
+      setCajaExpress(prev => prev ? { ...prev, descansando: false } : prev);
+    }
+  };
+
+  // Asegurar que si hay un Cliente Rojo en una cola, quede siempre al final
+  const ensureRojoAtEndForAll = (cajasArr, cajaExpr) => {
+    for (const caja of cajasArr) {
+      if (!caja || !Array.isArray(caja.clientes_en_fila)) continue;
+      const idx = caja.clientes_en_fila.findIndex(cl => cl && cl.es_rojo);
+      if (idx >= 0 && idx < caja.clientes_en_fila.length - 1) {
+        const [rojo] = caja.clientes_en_fila.splice(idx, 1);
+        caja.clientes_en_fila.push(rojo);
+      }
+    }
+    if (cajaExpr && Array.isArray(cajaExpr.clientes_en_fila)) {
+      const idxE = cajaExpr.clientes_en_fila.findIndex(cl => cl && cl.es_rojo);
+      if (idxE >= 0 && idxE < cajaExpr.clientes_en_fila.length - 1) {
+        const [rojoE] = cajaExpr.clientes_en_fila.splice(idxE, 1);
+        cajaExpr.clientes_en_fila.push(rojoE);
+      }
+    }
+  };
+
+  const handleSelectHour = (h) => {
+    setSelectedHour(h);
+    // Si hora pico: reactivar todas (comportamiento previo)
+    if (h >= 12 && h <= 14) {
+      wakeBoxesIfPeak(h);
+    } else {
+      // aplicar descansos automáticos según `descansoHora` de cada caja
+      setCajas(prev => prev.map(c => ({ ...c, descansando: c.descansoHora !== null && c.descansoHora === h })));
+      setCajaExpress(prev => prev ? { ...prev, descansando: (prev.descansoHora !== null && prev.descansoHora === h) } : prev);
+    }
+  };
+
+  // Multiplicador efectivo: aplica la regla de horario (08-20), la hora pico 12-14 (+2%)
+  // y amplifica los incrementos de fin de semana para que sean mucho más notables.
+  // Esta función NO depende de si el usuario seleccionó una caja: si la hora es 12/13/14
+  // el aumento se aplica tanto en modo manual como en modo random.
+  const computeEffectiveMultiplier = (day, hour) => {
+    // Usar el multiplicador base
+    const base = demandaMultiplier(day, hour); // 1.0 + incremento
+    const incrementoBase = base - 1.0;
+    // Amplificar incrementos de fin de semana (hacerlos "mucho más grandes")
+    let incremento = incrementoBase;
+    if (day === 4) incremento = incrementoBase * 3; // viernes
+    else if (day === 5) incremento = incrementoBase * 3; // sábado
+    else if (day === 6) incremento = incrementoBase * 3; // domingo
+    return 1.0 + incremento;
+  };
   // Parámetros de negocio en frontend (coinciden con backend)
+  const BASE_PER_CAJA = 10; // clientes base por caja para simulación random
   const rhoPeriodo = 30; // s
   const costoEsperaPorCliente = 0.05; // por segundo
   const slaUmbral = 120; // s
@@ -283,105 +425,112 @@ function App() {
 
   // Calcular costo total localmente (sumatoria costo_por_hora + costo espera + penalización)
   const calcularCostoTotalLocal = () => {
+    const desglose = calcularCostosPorCaja();
+    return desglose.reduce((s, r) => s + (r.total || 0), 0);
+  };
+
+  // Devuelve arreglo con desglose de costos por caja
+  const calcularCostosPorCaja = () => {
     const all = [...(cajasRef.current || []), cajaExpressRef.current].filter(Boolean);
-    let sumaCostosHora = 0;
-    let tiempoEnFilas = 0;
-    let numClientes = 0;
+    const costPerHour = 0.5; // $0.50 por hora según especificación
+    const resultados = [];
     for (const c of all) {
-      const horas = Math.max((c.cajero.horas_trabajadas || 0) / 3600, 8);
-      sumaCostosHora += (c.cajero.sueldo_base || 400) / horas;
-      const fila = [...(c.clientes_en_fila || []), c.cliente_actual ? c.cliente_actual : null].filter(Boolean);
+      const nombre = c.nombre || 'Caja';
+      const horasTrab = (c.cajero.horas_trabajadas || 0) / 3600; // en horas
+      const salario = horasTrab * costPerHour;
+      const fila = [...(c.clientes_en_fila || [])];
+      let tiempoFila = 0;
       for (const cl of fila) {
         const t = cl.tiempo_estimado != null ? cl.tiempo_estimado : calcularTiempoAtencion(cl, c.cajero.multiplicador);
-        tiempoEnFilas += t;
-        numClientes += 1;
+        tiempoFila += t;
       }
+      const costoEsperaCaja = costoEsperaPorCliente * tiempoFila;
+      // penalización local si el tiempo promedio en la caja supera el umbral
+      let penal = 0;
+      if (fila.length > 0) {
+        const tiempoProm = tiempoFila / fila.length;
+        if (tiempoProm > slaUmbral) penal = penalizacionSla;
+      }
+      const total = salario + costoEsperaCaja + penal;
+      resultados.push({ nombre, salario, costoEspera: costoEsperaCaja, penal, total });
     }
-    const costoEspera = costoEsperaPorCliente * tiempoEnFilas;
-    let penal = 0;
-    if (numClientes > 0) {
-      const tiempoProm = tiempoEnFilas / numClientes;
-      if (tiempoProm > slaUmbral) penal = penalizacionSla;
+    return resultados;
+  };
+
+  // Tabla solicitada: número de clientes atendidos, horas trabajadas y total según fórmula
+  const calcularTablaSalarios = () => {
+    const all = [...(cajasRef.current || []), cajaExpressRef.current].filter(Boolean);
+    const rows = [];
+    for (const c of all) {
+      const nombre = c.nombre || 'Caja';
+      const clientesAtendidos = (c.clientes_atendidos || []).length;
+      const horasTrab = (c.cajero && c.cajero.horas_trabajadas ? c.cajero.horas_trabajadas : 0) / 3600; // en horas
+      // Aplicar la fórmula del usuario: (sueldo_base / horasTrab) * clientesAtendidos
+      const sueldo = (c.cajero && c.cajero.sueldo_base) ? c.cajero.sueldo_base : 0;
+      const denom = Math.max(horasTrab, 0.01); // evitar división por cero (cap a 0.01h ~36s)
+      const total = clientesAtendidos * (sueldo / denom);
+      rows.push({ nombre, clientesAtendidos, horasTrab, total });
     }
-    return sumaCostosHora + costoEspera + penal;
+    return rows;
   };
   // const [finalizado, setFinalizado] = useState(false);
 
   // Iniciar simulación y animación
   const handleSimular = async () => {
   setSimulando(true);
+  // Si es hora pico, asegurar que todas las cajas estén activas
+  wakeBoxesIfPeak(selectedHour);
+  setLastCostoTotal(0);
   setTiempo(0);
   clearInterval(timerRef.current);
   setSimulacionActiva(false);
     try {
-      // Inicializar una simulación local con 15 clientes (ajustable)
-      const num_clientes = 15;
-      // Ajustar demanda según día/hora seleccionados y repartir clientes
-      const totalAjustado = Math.max(0, Math.round(num_clientes * demandaMultiplier(selectedDay, selectedHour)));
+      // Simulación aleatoria: repartir una cantidad significativa por caja
+      // Usar basePerCaja para determinar clientes por caja y aplicar multiplicador
+      const multSim = computeEffectiveMultiplier(selectedDay, selectedHour);
 
-      // Crear lista de clientes y repartirlos aleatoriamente
-      const crearClienteLocal = (i, agregado = false) => ({
-        nombre: `Cliente_${i+1}`,
-        articulos: Math.floor(10 + Math.random() * 6),
+      const crearClienteLocal = (idx, agregado = false, esRojo = false) => ({
+        nombre: esRojo ? `Cliente Rojo` : `Cliente_${idx+1}`,
+        articulos: esRojo ? Math.floor(8 + Math.random() * 8) : Math.floor(10 + Math.random() * 6),
         metodo_pago: ['Efectivo','Tarjeta','Transferencia'][Math.floor(Math.random()*3)],
         tiempo_estimado: null,
-        es_rojo: false,
+        es_rojo: !!esRojo,
         agregado_por_demanda: agregado,
       });
 
-      const cajasCopy = [...cajas];
-      const cajaExpressCopy = cajaExpress ? { ...cajaExpress } : null;
-      const extras = [];
-      for (let i=0;i<totalAjustado;i++) {
-        const isExtra = i >= num_clientes; // los extras vienen del multiplicador
-        const cliente = crearClienteLocal(i, isExtra);
-        const puedeExpress = cliente.articulos <= 10 && cajaExpressCopy;
-        if (puedeExpress) {
-          // enviarlo sólo a express
-          cajaExpressCopy.clientes_en_fila.push(cliente);
-        } else {
-          const destino = cajasCopy[Math.floor(Math.random()*cajasCopy.length)];
-          destino.clientes_en_fila.push(cliente);
+      const cajasCopy = [...cajas].map(c => ({ ...c, clientes_en_fila: [...(c.clientes_en_fila||[])] }));
+      const cajaExpressCopy = cajaExpress ? { ...cajaExpress, clientes_en_fila: [...(cajaExpress.clientes_en_fila||[])] } : null;
+
+      // Para cada caja disponible, calcular cantidad ajustada y añadir esos clientes
+      const disponiblesParaDistribuir = [...cajasCopy.filter(c => !c.descansando)];
+      if (cajaExpressCopy && !cajaExpressCopy.descansando) disponiblesParaDistribuir.push(cajaExpressCopy);
+
+      for (let i = 0; i < disponiblesParaDistribuir.length; i++) {
+        const dest = disponiblesParaDistribuir[i];
+        // Determinar la base a usar: input manual > previewBases > BASE_PER_CAJA
+        const manualBaseRaw = Number.parseInt(clientesPorCaja[dest.nombre] || '', 10);
+        const manualBase = (!Number.isNaN(manualBaseRaw) && manualBaseRaw > 0) ? manualBaseRaw : null;
+        const base = manualBase || (previewBases[dest.nombre] || BASE_PER_CAJA);
+        const expected = Math.max(0, Math.round(base * multSim));
+        const extras = Math.max(0, expected - base);
+        // Añadir clientes base (no marcados como agregados por demanda)
+        for (let k = 0; k < base; k++) {
+          const cliente = crearClienteLocal(k, false, false);
+          dest.clientes_en_fila.push(cliente);
         }
-        if (isExtra) extras.push(cliente);
-      }
-      // Replicar los clientes "extra" a todas las cajas normales y a la express si aplica
-      if (extras.length > 0) {
-        for (const extra of extras) {
-          for (const c of cajasCopy) {
-            c.clientes_en_fila.push(deepClone(extra));
-          }
-          if (cajaExpressCopy) {
-            // si el extra tiene <=10 artículos, también añadirlo a express
-            if (extra.articulos <= 10) {
-              cajaExpressCopy.clientes_en_fila.push(deepClone(extra));
-            }
-          }
+        // Añadir sólo las unidades extra marcadas como agregadas por demanda
+        for (let k = 0; k < extras; k++) {
+          const clienteExtra = crearClienteLocal(k, true, false);
+          dest.clientes_en_fila.push(clienteExtra);
         }
       }
-      // Añadir Cliente Rojo al final de cada cola (artículos <=10 para express)
-      for (const c of cajasCopy) {
-        const clienteRojo = {
-          nombre: 'Cliente Rojo',
-          articulos: 12,
-          metodo_pago: 'Tarjeta',
-          tiempo_estimado: null,
-          es_rojo: true,
-          agregado_por_demanda: false,
-        };
-        c.clientes_en_fila.push(clienteRojo);
+
+      // Añadir Cliente Rojo al final de cada caja disponible (según petición del usuario)
+      for (const dest of disponiblesParaDistribuir) {
+        dest.clientes_en_fila.push(crearClienteLocal(0, false, true));
       }
-      if (cajaExpressCopy) {
-        const clienteRojoExpress = {
-          nombre: 'Cliente Rojo',
-          articulos: 8,
-          metodo_pago: 'Tarjeta',
-          tiempo_estimado: null,
-          es_rojo: true,
-          agregado_por_demanda: false,
-        };
-        cajaExpressCopy.clientes_en_fila.push(clienteRojoExpress);
-      }
+      // Asegurar que Cliente Rojo quede al final de cada cola
+      ensureRojoAtEndForAll(cajasCopy, cajaExpressCopy);
       setCajas(cajasCopy);
       if (cajaExpressCopy) setCajaExpress(cajaExpressCopy);
       setSimulacionActiva(true);
@@ -410,6 +559,22 @@ function App() {
     setSimulando(false);
   };
 
+  // Generar bases aleatorias por caja para preview cuando no hay input manual
+  useEffect(() => {
+    try {
+      const names = [(cajas || []).map(c => c.nombre), cajaExpress ? [cajaExpress.nombre] : []].flat().filter(Boolean);
+      const map = {};
+      for (const name of names) {
+        const minBase = Math.max(1, BASE_PER_CAJA - 4);
+        const variability = Math.floor(Math.random() * 11); // 0..10
+        map[name] = minBase + variability; // rango: BASE-4 .. BASE+6..+? (ajustable)
+      }
+      setPreviewBases(map);
+    } catch {
+      // silencioso
+    }
+  }, [cajas, cajaExpress, selectedDay, selectedHour]);
+
   // Nota: la interfaz ya no expone panel para enviar/obtener configuración al backend.
 
   useEffect(() => {
@@ -423,7 +588,8 @@ function App() {
           const copia = prev.map(c => ({ ...c, clientes_en_fila: [...c.clientes_en_fila], clientes_atendidos: [...c.clientes_atendidos] }));
           for (const caja of copia) {
             if (!caja.cliente_actual) {
-              if (caja.clientes_en_fila.length > 0) {
+              // no iniciar nuevo cliente si la caja está en descanso
+              if (caja.clientes_en_fila.length > 0 && !caja.descansando) {
                 const siguiente = caja.clientes_en_fila.shift();
                 siguiente.tiempo_estimado = calcularTiempoAtencion(siguiente, caja.cajero.multiplicador);
                 caja.cliente_actual = siguiente;
@@ -431,6 +597,7 @@ function App() {
               }
             } else {
               caja.tiempo_restante_cliente_actual -= 1;
+              // sólo acumular horas si está atendiendo a un cliente (trabajando)
               caja.cajero.horas_trabajadas += 1; // acumular segundo
               if (caja.tiempo_restante_cliente_actual <= 0) {
                 caja.clientes_atendidos.push(caja.cliente_actual);
@@ -447,7 +614,8 @@ function App() {
           if (!prev) return prev;
           const copia = { ...prev, clientes_en_fila: [...prev.clientes_en_fila], clientes_atendidos: [...prev.clientes_atendidos] };
           if (!copia.cliente_actual) {
-            if (copia.clientes_en_fila.length > 0) {
+            // no iniciar nuevo cliente si la expres está en descanso
+            if (copia.clientes_en_fila.length > 0 && !copia.descansando) {
               const siguiente = copia.clientes_en_fila.shift();
               siguiente.tiempo_estimado = calcularTiempoAtencion(siguiente, copia.cajero.multiplicador);
               copia.cliente_actual = siguiente;
@@ -585,17 +753,18 @@ function App() {
           {[0,1,2,3,4,5,6].map(d => <option key={d} value={d}>{d}</option>)}
         </select>
         <label style={{color:'#fff'}}>Hora:</label>
-        <select value={selectedHour} onChange={e => setSelectedHour(Number(e.target.value))} style={{padding:6, borderRadius:6}}>
-          {Array.from({length:24}, (_,i)=>i).map(h => <option key={h} value={h}>{h}</option>)}
+        <select value={selectedHour} onChange={e => handleSelectHour(Number(e.target.value))} style={{padding:6, borderRadius:6}}>
+          {Array.from({length:13}, (_,i)=>i+8).map(h => <option key={h} value={h}>{h}</option>)}
         </select>
       </div>
       {/* Panel de configuración eliminado por petición del usuario */}
       <div style={{marginBottom: 12, color: '#fff', display: 'flex', gap: 16, alignItems: 'center'}}>
         <div style={{background: '#181b22', padding: '8px 12px', borderRadius: 8}}>
-          Costo total estimado: <b>{(enAnimacion || simulacionActiva) ? (costoTotal.toFixed ? costoTotal.toFixed(2) : costoTotal) : '0.00'}</b>
+          Costo total estimado: <b>{(enAnimacion || simulacionActiva) ? (costoTotal.toFixed ? costoTotal.toFixed(2) : costoTotal) : (lastCostoTotal.toFixed ? lastCostoTotal.toFixed(2) : lastCostoTotal)}</b>
         </div>
         <div style={{background: '#181b22', padding: '8px 12px', borderRadius: 8}}>Cajas en servicio: <b>{numCajasEnServicio}</b></div>
       </div>
+      {/* (Cost table moved below the cajas) */}
       <div style={{ display: 'flex', gap: '32px', flexWrap: 'nowrap', justifyContent: 'center', alignItems: 'flex-start', width: '100%' }}>
   {enAnimacion ? mostrarAnimacion ? (
           estadoAnimado.map((caja, i) => (
@@ -636,43 +805,98 @@ function App() {
           )
         ]) : (
           <>
-            {cajas.map((caja, i) => (
-              <div key={i} style={{display: 'flex', flexDirection: 'column', alignItems: 'center'}}>
-                <Caja
-                  nombre={caja.nombre}
-                    clientes={caja.clientes_en_fila || []}
-                  esExpress={caja.nombre.toLowerCase().includes('express')}
-                  cajero={caja.cajero}
-                />
-                <div style={{marginTop: 8, display: 'flex', gap: 8, alignItems: 'center'}}>
-                  <input
-                    type="number"
-                    min={1}
-                    placeholder="N° clientes"
-                    value={clientesPorCaja[caja.nombre] || ''}
-                    onChange={e => handleInputClientes(caja.nombre, e.target.value)}
-                    style={{width: 90, padding: 6, borderRadius: 6, border: '1px solid #888', marginRight: 2, fontSize: '1.08em'}}
-                  />
-                  <select
-                    value={cajeroPorCaja[caja.nombre] || 'Normal'}
-                    onChange={e => handleSelectCajero(caja.nombre, e.target.value)}
-                    style={{padding: '6px 12px', borderRadius: '6px', border: '1px solid #1e90ff', background: '#223a5e', color: '#fff', fontWeight: 'bold', fontSize: '1.08em', boxShadow: '0 1px 4px #111a'}}
-                  >
-                    <option value="Normal">Normal</option>
-                    <option value="Principiante">Principiante</option>
-                    <option value="Experto">Experto</option>
-                  </select>
+            {cajas.map((caja, i) => {
+              // calcular extras previstos por caja comparando lo esperado vs cola actual
+              const multUI = computeEffectiveMultiplier(selectedDay, selectedHour);
+              // si hay un input manual, usarlo como base para esa caja
+              const baseInput = Number.parseInt(clientesPorCaja[caja.nombre] || '', 10);
+              const baseForThis = !Number.isNaN(baseInput) && baseInput > 0 ? baseInput : (previewBases[caja.nombre] || BASE_PER_CAJA);
+              const expected = Math.max(0, Math.round(baseForThis * multUI));
+              const currentLen = (caja.clientes_en_fila || []).length;
+              const extrasPorCaja = Math.max(0, expected - currentLen);
+              // quitar fondo verde por completo; mantener transparente
+              const highlightBg = 'transparent';
+              const borderStyle = caja.descansando ? '2px solid #ff5555' : '1px solid transparent';
+              return (
+                <div key={i} style={{display: 'flex', flexDirection: 'column', alignItems: 'center', background: highlightBg, padding: 6, borderRadius: 8, border: borderStyle}}>
+                  <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                    <Caja
+                      nombre={caja.nombre}
+                      clientes={caja.clientes_en_fila || []}
+                      esExpress={caja.nombre.toLowerCase().includes('express')}
+                      cajero={caja.cajero}
+                    />
+                    {extrasPorCaja > 0 && !caja.descansando && (
+                      <div style={{background: '#2ecc71', color: '#052', fontWeight: 'bold', padding: '6px 8px', borderRadius: 10, fontSize: '0.9em'}}>
+                        +{extrasPorCaja}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{marginTop: 8, display: 'flex', gap: 8, alignItems: 'center'}}>
+                    <input
+                      type="number"
+                      min={1}
+                      placeholder="N° clientes"
+                      value={clientesPorCaja[caja.nombre] || ''}
+                      onChange={e => handleInputClientes(caja.nombre, e.target.value)}
+                      style={{width: 90, padding: 6, borderRadius: 6, border: '1px solid #888', marginRight: 2, fontSize: '1.08em'}}
+                    />
+                    <select
+                      value={cajeroPorCaja[caja.nombre] || 'Normal'}
+                      onChange={e => handleSelectCajero(caja.nombre, e.target.value)}
+                      style={{padding: '6px 12px', borderRadius: '6px', border: '1px solid #1e90ff', background: '#223a5e', color: '#fff', fontWeight: 'bold', fontSize: '1.08em', boxShadow: '0 1px 4px #111a'}}
+                    >
+                      <option value="Normal">Normal</option>
+                      <option value="Principiante">Principiante</option>
+                      <option value="Experto">Experto</option>
+                    </select>
+                    <label style={{color:'#fff'}}>Hora descanso:</label>
+                    <select value={caja.descansoHora === null ? '' : caja.descansoHora} onChange={e => handleSetDescansoHora(caja.nombre, e.target.value === '' ? null : Number(e.target.value))} style={{padding: '6px 8px', borderRadius: 6}}>
+                      <option value="">--</option>
+                      {Array.from({length:13},(_,i)=>i+8).map(h => <option key={h} value={h}>{h}:00</option>)}
+                    </select>
+                    <button
+                      onClick={() => handleToggleDescanso(caja.nombre, !caja.descansando)}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        background: caja.descansando ? '#ff5555' : '#2ecc71',
+                        color: '#fff',
+                        fontWeight: 'bold'
+                      }}
+                      title={caja.descansando ? 'Caja en descanso (clic para activar)' : 'Caja activa (clic para poner en descanso)'}
+                    >
+                      {caja.descansando ? 'Descansando' : 'Disponible'}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             {cajaExpress && (
-              <div key={cajas.length} style={{display: 'flex', flexDirection: 'column', alignItems: 'center'}}>
-                <Caja
-                  nombre={cajaExpress.nombre}
-                  clientes={cajaExpress.clientes_en_fila || []}
-                  esExpress={true}
-                  cajero={cajaExpress.cajero}
-                />
+              <div key={cajas.length} style={{display: 'flex', flexDirection: 'column', alignItems: 'center', border: cajaExpress.descansando ? '2px solid #ff5555' : '1px solid transparent', padding: 6, borderRadius: 8}}>
+                <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+                  <Caja
+                    nombre={cajaExpress.nombre}
+                    clientes={cajaExpress.clientes_en_fila || []}
+                    esExpress={true}
+                    cajero={cajaExpress.cajero}
+                  />
+                  {(() => {
+                    const multUI_E = computeEffectiveMultiplier(selectedDay, selectedHour);
+                    const baseInputE = Number.parseInt(clientesPorCaja[cajaExpress.nombre] || '', 10);
+                    const baseForExpress = !Number.isNaN(baseInputE) && baseInputE > 0 ? baseInputE : (previewBases[cajaExpress.nombre] || BASE_PER_CAJA);
+                    const expectedE = Math.max(0, Math.round(baseForExpress * multUI_E));
+                    const currentLenE = (cajaExpress.clientes_en_fila || []).length;
+                    const extrasExpress = Math.max(0, expectedE - currentLenE);
+                    return (extrasExpress > 0 && !cajaExpress.descansando) ? (
+                      <div style={{background: '#2ecc71', color: '#052', fontWeight: 'bold', padding: '6px 8px', borderRadius: 10, fontSize: '0.9em'}}>
+                        +{extrasExpress}
+                      </div>
+                    ) : null;
+                  })()}
+                </div>
                 <div style={{marginTop: 8, display: 'flex', gap: 8, alignItems: 'center'}}>
                   <input
                     type="number"
@@ -691,13 +915,69 @@ function App() {
                     <option value="Principiante">Principiante</option>
                     <option value="Experto">Experto</option>
                   </select>
+                  <label style={{color:'#fff'}}>Hora descanso:</label>
+                  <select value={cajaExpress.descansoHora === null ? '' : cajaExpress.descansoHora} onChange={e => handleSetDescansoHora(cajaExpress.nombre, e.target.value === '' ? null : Number(e.target.value))} style={{padding: '6px 8px', borderRadius: 6}}>
+                    <option value="">--</option>
+                    {Array.from({length:13},(_,i)=>i+8).map(h => <option key={h} value={h}>{h}:00</option>)}
+                  </select>
+                  <label style={{color:'#fff', display:'flex', alignItems:'center', gap:6}}>
+                    <button
+                      onClick={() => handleToggleDescanso(cajaExpress.nombre, !cajaExpress.descansando)}
+                      style={{
+                        padding: '6px 10px',
+                        borderRadius: 8,
+                        border: 'none',
+                        cursor: 'pointer',
+                        background: cajaExpress.descansando ? '#ff5555' : '#2ecc71',
+                        color: '#fff',
+                        fontWeight: 'bold'
+                      }}
+                      title={cajaExpress.descansando ? 'Caja Express en descanso (clic para activar)' : 'Caja Express activa (clic para poner en descanso)'}
+                    >
+                      {cajaExpress.descansando ? 'Descansando' : 'Disponible'}
+                    </button>
+                  </label>
                 </div>
               </div>
             )}
           </>
         )}
       </div>
-      {/* Texto explicativo eliminado por solicitud del usuario */}
+      {/* Tabla solicitada: número de clientes atendidos, horas trabajadas y total (fórmula del usuario) */}
+      <div style={{width: '86%', maxWidth: 980, marginTop: 16, marginBottom: 12}}>
+        {cajaSeleccionada && (
+          <div style={{color:'#1e90ff', marginBottom:8, fontWeight:'bold'}}>Caja seleccionada: {cajaSeleccionada}</div>
+        )}
+        <table style={{width: '100%', borderCollapse: 'collapse', color: '#fff'}}>
+          <thead>
+            <tr style={{textAlign: 'left', borderBottom: '1px solid #333'}}>
+              <th style={{padding: 6}}>Caja</th>
+              <th style={{padding: 6}}>Clientes atendidos</th>
+              <th style={{padding: 6}}>Horas trabajadas</th>
+              <th style={{padding: 6}}>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {calcularTablaSalarios().map((r, i) => (
+              <tr
+                key={i}
+                onClick={() => setCajaSeleccionada(r.nombre)}
+                style={{
+                  borderBottom: '1px solid #222',
+                  cursor: 'pointer',
+                  background: cajaSeleccionada === r.nombre ? '#1e90ff22' : 'transparent'
+                }}
+              >
+                <td style={{padding: 6}}>{r.nombre}</td>
+                <td style={{padding: 6}}>{r.clientesAtendidos}</td>
+                <td style={{padding: 6}}>{r.horasTrab.toFixed(2)}</td>
+                <td style={{padding: 6}}>{r.total.toFixed(2)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
       {/* Tabla de comparación del cliente rojo */}
   {simulacionActiva && comparacionRojo.length > 0 && (
         <div style={{margin: '32px auto 0', maxWidth: 480, background: '#181b22', borderRadius: 12, boxShadow: '0 2px 12px #0008', padding: 18, color: '#fff'}}>

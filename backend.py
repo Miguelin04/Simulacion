@@ -122,12 +122,6 @@ def abrir_caja_manual():
 
 @app.route('/api/set_cajero', methods=['POST'])
 def set_cajero():
-    """Actualizar el tipo de cajero de una caja por nombre.
-    Parámetros esperados (form/querystring):
-    - nombre: nombre de la caja (p.ej. 'Caja 1' o 'Caja Express')
-    - tipo: 'Principiante'|'Normal'|'Experto'
-    - sueldo (opcional): valor numérico para sueldo_base
-    """
     global supermercado
     if supermercado is None:
         return jsonify({'error': 'No hay simulación activa'}), 400

@@ -14,6 +14,7 @@ class Cliente:
         self.metodo_pago   = ""
         self.articulos     = []
         self.tiempo_total_atencion = 0 # Nuevo: para guardar el resultado final
+        #abandono de fila si supera el tiempo de espera 
 
 
     #Creo la lista de los artículos que quiere llevarse
@@ -55,3 +56,52 @@ class Cliente:
         tiempo_real_escaneo = self.num_articulos * tiempo_escaneo
         self.tiempo_total_atencion = tiempo_real_escaneo + tiempo_cobro
         return int(round(self.tiempo_total_atencion, 0))
+    
+
+    #calcular?perdida
+    #calcular para que aummente el numero de clientes cuando es hora pico 12:00 - 14:00
+
+
+# Funciones de demanda (reutilizables desde el backend/frontend)
+def demanda_multiplier(day: int, hour: int) -> float:
+    """
+    Devuelve un multiplicador de demanda según el día y la hora.
+
+    - day: 0=Lunes ... 6=Domingo (coincide con mapeos usados en frontend)
+    - hour: 0..23 (hora del día)
+
+    Reglas implementadas:
+    - Sólo se aplica el ajuste en el rango de operación: 08:00 <= hour <= 20:00.
+    - Viernes (4): +5% (0.05)
+    - Sábado (5): +10% (0.10)
+    - Domingo (6): +15% (0.15)
+    - Hora punta 12:00-14:00 (incluye 12 y 13): +2% (0.02)
+
+    Ejemplo: para viernes a las 12h el multiplicador será 1 + 0.05 + 0.02 = 1.07
+    """
+    # Rango de operación
+    if hour < 8 or hour > 20:
+        return 1.0
+
+    incremento = 0.0
+    # Ajuste por día
+    if day == 4:
+        incremento += 0.05
+    elif day == 5:
+        incremento += 0.10
+    elif day == 6:
+        incremento += 0.15
+
+    # Hora punta 12:00 - 13:59 -> aplicamos si hour es 12 o 13
+    # Incluir horas 12, 13 y 14 según nueva especificación
+    if 12 <= hour <= 14:
+        # Aumento de demanda en horas pico: 30% según nueva especificación
+        incremento += 0.30
+
+    return 1.0 + incremento
+
+
+def ajustar_clientes_por_demanda(cantidad_base: int, day: int, hour: int) -> int:
+    mult = demanda_multiplier(day, hour)
+    cantidad = max(0, int(round(cantidad_base * mult)))
+    return cantidad

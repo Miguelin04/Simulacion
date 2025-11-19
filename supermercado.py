@@ -1,5 +1,5 @@
 from Caja import Caja
-from cliente import Cliente
+from cliente import Cliente, demanda_multiplier
 import random
 import datetime
 
@@ -308,17 +308,9 @@ class Supermercado:
         """
         dia = self.dia if dia is None else dia
         hora = self.hora if hora is None else hora
-        incremento = 0.0
-        if dia == 4:
-            incremento += 0.05
-        elif dia == 5:
-            incremento += 0.10
-        elif dia == 6:
-            incremento += 0.15
-        # Franja horaria de mayor demanda
-        if 12 <= hora < 14:
-            incremento += 0.02
-        num_ajustado = int(round(num_clientes * (1.0 + incremento)))
+        # Usar la función centralizada definida en cliente.py
+        mult = demanda_multiplier(dia, hora)
+        num_ajustado = int(round(num_clientes * mult))
         return max(0, num_ajustado)
 
     def calcular_tiempo_total_en_filas(self):
