@@ -75,6 +75,24 @@
   border: 2px solid #2ecc71;
   box-shadow: 0 0 10px #2ecc7199;
 }
+
+.cliente.abandonado {
+  border: 3px solid #1e90ff;
+  box-shadow: 0 0 18px #1e90ff88, inset 0 0 8px rgba(30,144,255,0.06);
+  background: linear-gradient(90deg, rgba(30,144,255,0.12), rgba(30,144,255,0.04));
+  transform: translateY(-2px);
+  animation: pulseBlue 1.2s infinite ease-in-out;
+}
+
+/* Make the person icon and time badge more blue for abandoned clients */
+.cliente.abandonado .icono-persona { color: #1e90ff; filter: drop-shadow(0 0 6px #1e90ff66); }
+.cliente.abandonado .tiempo-rojo { background: #1e90ff; box-shadow: 0 0 6px #1e90ff66; }
+
+@keyframes pulseBlue {
+  0% { box-shadow: 0 0 8px #1e90ff66, inset 0 0 4px rgba(30,144,255,0.06); }
+  50% { box-shadow: 0 0 22px #1e90ff88, inset 0 0 8px rgba(30,144,255,0.12); }
+  100% { box-shadow: 0 0 8px #1e90ff66, inset 0 0 4px rgba(30,144,255,0.06); }
+}
 .icono-persona {
   font-size: 1.5em;
   margin-right: 4px;

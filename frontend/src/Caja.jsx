@@ -32,7 +32,7 @@ function Caja({ nombre, clientes = [], esExpress, esMejor, cajero, animando, ate
           return (
             <div
                   key={idx}
-                  className={`cliente ${cliente.es_rojo ? 'rojo' : ''} ${cliente.agregado_por_demanda ? 'agregado-demanda' : ''}`}
+                  className={`cliente ${cliente.es_rojo ? 'rojo' : ''} ${cliente.agregado_por_demanda ? 'agregado-demanda' : ''} ${(cliente.abandono || (cliente._removerCountdown && cliente._removerCountdown > 0)) ? 'abandonado' : ''}`}
                 >
               <span className="icono-persona" role="img" aria-label="persona">🧑</span>
               <span className="nombre-cliente">{cliente.nombre}</span>

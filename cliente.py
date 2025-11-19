@@ -84,12 +84,6 @@ class Cliente:
         return espera_estimada
 
     def debe_abandonar(self, numero_clientes_fila: int, multiplicador_cajero: float = 1.0) -> bool:
-        """
-        Devuelve True si el cliente decide abandonar la fila.
-        Reglas:
-        - Si la espera estimada supera 240s (4 minutos), abandona.
-        - Si la espera estimada supera su `paciencia`, también abandona.
-        """
         espera = self.calcular_maximo_espera(numero_clientes_fila, multiplicador_cajero)
         if espera > 240:
             return True
@@ -98,7 +92,6 @@ class Cliente:
         return False
 
     def calcular_perdida(self) -> float:
-        """Suma y devuelve el precio total de los artículos del cliente."""
         if not self.articulos:
             return 0.0
         return round(sum((a.precio for a in self.articulos)), 2)
@@ -110,21 +103,6 @@ class Cliente:
 
 # Funciones de demanda (reutilizables desde el backend/frontend)
 def demanda_multiplier(day: int, hour: int) -> float:
-    """
-    Devuelve un multiplicador de demanda según el día y la hora.
-
-    - day: 0=Lunes ... 6=Domingo (coincide con mapeos usados en frontend)
-    - hour: 0..23 (hora del día)
-
-    Reglas implementadas:
-    - Sólo se aplica el ajuste en el rango de operación: 08:00 <= hour <= 20:00.
-    - Viernes (4): +5% (0.05)
-    - Sábado (5): +10% (0.10)
-    - Domingo (6): +15% (0.15)
-    - Hora punta 12:00-14:00 (incluye 12 y 13): +2% (0.02)
-
-    Ejemplo: para viernes a las 12h el multiplicador será 1 + 0.05 + 0.02 = 1.07
-    """
     # Rango de operación
     if hour < 8 or hour > 20:
         return 1.0

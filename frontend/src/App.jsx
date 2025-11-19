@@ -66,8 +66,6 @@ function App() {
     }
     setSimulacionActiva(false);
 
-    // Asignar manualmente clientes a cajas según inputs (sin usar APIs)
-    // Construir clientes y añadir a la caja correspondiente
     const crearClienteLocal = (nombre, agregado = false) => {
       const articulos = Math.floor(10 + Math.random() * 6);
       // paciencia en segundos (2..6 minutos)
@@ -87,13 +85,33 @@ function App() {
         agregado_por_demanda: agregado,
         paciencia,
         precio_total,
-        abandono: false
+        abandono: false,
+        tiempo_en_fila: 0
       };
     };
 
     // Aplicar entradas manuales (ajustando por día/hora seleccionados)
-    const cajasCopy = [...cajas];
-    const cajaExpressCopy = cajaExpress ? { ...cajaExpress } : null;
+    // Copiar cajas y reiniciar contadores de atención para el inicio manual
+    const cajasCopy = [...cajas].map(c => ({
+      ...c,
+      clientes_en_fila: [...(c.clientes_en_fila || [])],
+      cliente_actual: null,
+      tiempo_restante_cliente_actual: 0,
+      clientes_atendidos: [],
+      perdida_total: 0,
+      clientes_perdidos: [],
+      cajero: { ...(c.cajero || {}), horas_trabajadas: 0 }
+    }));
+    const cajaExpressCopy = cajaExpress ? ({
+      ...cajaExpress,
+      clientes_en_fila: [...(cajaExpress.clientes_en_fila || [])],
+      cliente_actual: null,
+      tiempo_restante_cliente_actual: 0,
+      clientes_atendidos: [],
+      perdida_total: 0,
+      clientes_perdidos: [],
+      cajero: { ...(cajaExpress.cajero || {}), horas_trabajadas: 0 }
+    }) : null;
     // Si hay una caja seleccionada en la tabla, calcular referencia para usar como destino
     const destinoSeleccionado = cajaSeleccionada ? (cajasCopy.find(c => c.nombre === cajaSeleccionada) || (cajaExpressCopy && cajaExpressCopy.nombre === cajaSeleccionada ? cajaExpressCopy : null)) : null;
     // Calcular multiplicador y cantidades ajustadas por cada input, pero NO asignar extras todavía
@@ -288,42 +306,6 @@ function App() {
     }
   }
 
-  const handleToggleDescanso = (nombreCaja, valor) => {
-    setCajas(prev => prev.map(c => c.nombre === nombreCaja ? { 
-      ...c,
-      descansando: valor,
-      // si ponemos en descanso, limpiar la fila y el cliente actual
-      clientes_en_fila: valor ? [] : c.clientes_en_fila,
-      cliente_actual: valor ? null : c.cliente_actual,
-      tiempo_restante_cliente_actual: valor ? 0 : c.tiempo_restante_cliente_actual,
-    } : c));
-    setCajaExpress(prev => {
-      if (!prev) return prev;
-      if (prev.nombre === nombreCaja) return { 
-        ...prev,
-        descansando: valor,
-        clientes_en_fila: valor ? [] : prev.clientes_en_fila,
-        cliente_actual: valor ? null : prev.cliente_actual,
-        tiempo_restante_cliente_actual: valor ? 0 : prev.tiempo_restante_cliente_actual,
-        descansoHora: valor ? prev.descansoHora : prev.descansoHora,
-      };
-      return prev;
-    });
-  }
-
-  // Establecer hora de descanso para una caja (null para none)
-  const handleSetDescansoHora = (nombreCaja, hora) => {
-    setCajas(prev => prev.map(c => c.nombre === nombreCaja ? { ...c, descansoHora: hora, descansando: (hora !== null && hora === selectedHour) } : c));
-    setCajaExpress(prev => {
-      if (!prev) return prev;
-      if (prev.nombre === nombreCaja) {
-        const nuevaHora = hora;
-        return { ...prev, descansoHora: nuevaHora, descansando: (nuevaHora !== null && nuevaHora === selectedHour) };
-      }
-      return prev;
-    });
-  };
-
   const [cajas, setCajas] = useState([]);
   const [cajaExpress, setCajaExpress] = useState(null);
   const [cajaSeleccionada, setCajaSeleccionada] = useState(null);
@@ -444,9 +426,6 @@ function App() {
   // Parámetros de negocio en frontend (coinciden con backend)
   const BASE_PER_CAJA = 10; // clientes base por caja para simulación random
   const rhoPeriodo = 30; // s
-  const costoEsperaPorCliente = 0.05; // por segundo
-  const slaUmbral = 120; // s
-  const penalizacionSla = 50;
 
   // Calcular costo total localmente (sumatoria costo_por_hora + costo espera + penalización)
   const calcularCostoTotalLocal = () => {
@@ -456,52 +435,47 @@ function App() {
 
   // Devuelve arreglo con desglose de costos por caja
   const calcularCostosPorCaja = () => {
-    const all = [...(cajasRef.current || []), cajaExpressRef.current].filter(Boolean);
-    const costPerHour = 0.5; // $0.50 por hora según especificación
-    const resultados = [];
-    for (const c of all) {
-      const nombre = c.nombre || 'Caja';
-      const horasTrab = (c.cajero.horas_trabajadas || 0) / 3600; // en horas
-      const salario = horasTrab * costPerHour;
-      const fila = [...(c.clientes_en_fila || [])];
-      let tiempoFila = 0;
-      for (const cl of fila) {
-        const t = cl.tiempo_estimado != null ? cl.tiempo_estimado : calcularTiempoAtencion(cl, c.cajero.multiplicador);
-        tiempoFila += t;
-      }
-      const costoEsperaCaja = costoEsperaPorCliente * tiempoFila;
-      // penalización local si el tiempo promedio en la caja supera el umbral
-      let penal = 0;
-      if (fila.length > 0) {
-        const tiempoProm = tiempoFila / fila.length;
-        if (tiempoProm > slaUmbral) penal = penalizacionSla;
-      }
-      const total = salario + costoEsperaCaja + penal;
-      resultados.push({ nombre, salario, costoEspera: costoEsperaCaja, penal, total });
-    }
-    return resultados;
-  };
-
-  // Tabla solicitada: número de clientes atendidos, horas trabajadas y total según fórmula
-  const calcularTablaSalarios = () => {
-    const all = [...(cajasRef.current || []), cajaExpressRef.current].filter(Boolean);
     const rows = [];
+    const all = [...(cajasRef.current || []), cajaExpressRef.current].filter(Boolean);
     for (const c of all) {
       const nombre = c.nombre || 'Caja';
-        const clientesAtendidos = (c.clientes_atendidos || []).length;
-        // horas trabajadas como entero (horas), cap a 12h por día
-        const horasTrabSeconds = (c.cajero && c.cajero.horas_trabajadas ? c.cajero.horas_trabajadas : 0);
-        const horasTrabInt = Math.min(12, Math.floor(horasTrabSeconds / 3600));
-        // Aplicar la fórmula del usuario: (sueldo_base / horasTrab) * clientesAtendidos
-        const sueldo = (c.cajero && c.cajero.sueldo_base) ? c.cajero.sueldo_base : 0;
-        const denom = Math.max(horasTrabInt, 1); // evitar división por cero, usar al menos 1h
-        const total = clientesAtendidos * (sueldo / denom);
-        // Añadir métricas de pérdidas y clientes perdidos (si el frontend acumuló abandonos)
-        const perdidaTotal = c.perdida_total || 0;
-        const clientesPerdidos = (c.clientes_perdidos || []).length || 0;
-        rows.push({ nombre, clientesAtendidos, horasTrab: horasTrabInt, total, perdidaTotal, clientesPerdidos });
+      const clientesAtendidos = (c.clientes_atendidos || []).length;
+      // horas trabajadas como entero (horas), mostrar en rango 1..8
+      const horasTrabSeconds = (c.cajero && c.cajero.horas_trabajadas ? c.cajero.horas_trabajadas : 0);
+      const horasTrab = Math.min(8, Math.max(1, Math.floor(horasTrabSeconds / 3600)));
+      // Aplicar la fórmula del usuario: (sueldo_base / horasTrab) * clientesAtendidos
+      const sueldo = (c.cajero && c.cajero.sueldo_base) ? c.cajero.sueldo_base : 0;
+      const denom = Math.max(horasTrab, 1); // evitar división por cero, usar al menos 1h
+      const total = clientesAtendidos * (sueldo / denom);
+      // Añadir métricas de pérdidas y clientes perdidos (si el frontend acumuló abandonos)
+      const perdidaTotal = c.perdida_total || 0;
+      const clientesPerdidos = (c.clientes_perdidos || []).length || 0;
+      // lista de nombres de clientes que abandonaron (para mostrar en la tabla)
+      const listaAbandonos = (c.clientes_perdidos || []).map(cl => cl && cl.nombre ? cl.nombre : '').filter(Boolean).join(', ');
+      rows.push({ nombre, clientesAtendidos, horasTrab, total, perdidaTotal, clientesPerdidos, listaAbandonos });
     }
     return rows;
+  };
+  // wrapper para compatibilidad con el render que llamaba a `calcularTablaSalarios`
+  const calcularTablaSalarios = () => calcularCostosPorCaja();
+  // Obtener lista global de abandonos para mostrar en UI
+  const obtenerAbandonosGlobal = () => {
+    const all = [...(cajasRef.current || []), cajaExpressRef.current].filter(Boolean);
+    const res = [];
+    for (const c of all) {
+      const perdidos = (c.clientes_perdidos || []);
+      for (const cl of perdidos) {
+        if (!cl) continue;
+        res.push({
+          caja: c.nombre || 'Caja',
+          nombre: cl.nombre || '-',
+          tiempo_en_fila: cl.tiempo_en_fila || 0,
+          precio_total: cl.precio_total || 0,
+          agregado_por_demanda: cl.agregado_por_demanda || false
+        });
+      }
+    }
+    return res;
   };
   // const [finalizado, setFinalizado] = useState(false);
 
@@ -528,11 +502,31 @@ function App() {
         agregado_por_demanda: agregado,
         paciencia: Math.floor(120 + Math.random() * (360 - 120 + 1)),
         precio_total: Math.round(Array.from({ length: (esRojo ? Math.floor(8 + Math.random() * 8) : Math.floor(10 + Math.random() * 6)) }).reduce((s) => s + (Math.random() * (150 - 5) + 5), 0) * 100) / 100,
-        abandono: false
+        abandono: false,
+        tiempo_en_fila: 0
       });
 
-      const cajasCopy = [...cajas].map(c => ({ ...c, clientes_en_fila: [...(c.clientes_en_fila||[])] }));
-      const cajaExpressCopy = cajaExpress ? { ...cajaExpress, clientes_en_fila: [...(cajaExpress.clientes_en_fila||[])] } : null;
+      // Reiniciar estado de atención y contadores para la nueva simulación
+      const cajasCopy = [...cajas].map(c => ({ 
+        ...c, 
+        clientes_en_fila: [...(c.clientes_en_fila||[])], 
+        cliente_actual: null,
+        tiempo_restante_cliente_actual: 0,
+        clientes_atendidos: [],
+        perdida_total: 0,
+        clientes_perdidos: [],
+        cajero: { ...(c.cajero || {}), horas_trabajadas: 0 }
+      }));
+      const cajaExpressCopy = cajaExpress ? { 
+        ...cajaExpress, 
+        clientes_en_fila: [...(cajaExpress.clientes_en_fila||[])], 
+        cliente_actual: null,
+        tiempo_restante_cliente_actual: 0,
+        clientes_atendidos: [],
+        perdida_total: 0,
+        clientes_perdidos: [],
+        cajero: { ...(cajaExpress.cajero || {}), horas_trabajadas: 0 }
+      } : null;
 
       // Si no existen previewBases para las cajas actuales, generarlas ahora para asegurar variabilidad aleatoria
       try {
@@ -608,6 +602,8 @@ function App() {
     setSimulando(false);
   };
 
+  /* Ejemplo eliminado */
+
   // Generar bases aleatorias por caja para preview cuando no hay input manual
   useEffect(() => {
     try {
@@ -629,37 +625,14 @@ function App() {
   useEffect(() => {
     if (!enAnimacion) return;
     timerRef.current = setInterval(() => {
-      // Avanzar 1 segundo (o más si modoRapido)
-      const pasos = modoRapido ? 10 : 1;
-      for (let p=0;p<pasos;p++) {
-        // Actualizar cada caja localmente
+      const pasos = modoRapido ? 10 : 1; // velocidad lógica
+
+      // 1) Avanzar la atención (lógica) 'pasos' segundos: acelerar servicio y horas trabajadas
+      for (let p = 0; p < pasos; p++) {
         setCajas(prev => {
           const copia = prev.map(c => ({ ...c, clientes_en_fila: [...c.clientes_en_fila], clientes_atendidos: [...c.clientes_atendidos], perdida_total: c.perdida_total || 0, clientes_perdidos: c.clientes_perdidos || [] }));
           for (const caja of copia) {
-            // Evaluar abandonos en la fila antes de iniciar atención
-            try {
-              let nuevaFila = [];
-              let tiempo_ahead = caja.tiempo_restante_cliente_actual || 0;
-              for (const cl of caja.clientes_en_fila) {
-                const est_por_cliente = ((cl.articulos || 0) * 3.5 + 7) * (caja.cajero && caja.cajero.multiplicador ? caja.cajero.multiplicador : 1);
-                if (tiempo_ahead > 240 || (cl.paciencia && tiempo_ahead > cl.paciencia)) {
-                  // cliente abandona
-                  caja.perdida_total = (caja.perdida_total || 0) + (cl.precio_total || 0);
-                  caja.clientes_perdidos = caja.clientes_perdidos || [];
-                  caja.clientes_perdidos.push(cl);
-                  cl.abandono = true;
-                  continue;
-                }
-                nuevaFila.push(cl);
-                tiempo_ahead += est_por_cliente;
-              }
-              caja.clientes_en_fila = nuevaFila;
-            } catch (e) {
-              // ignorar errores en cálculo de abandonos
-            }
-
             if (!caja.cliente_actual) {
-              // no iniciar nuevo cliente si la caja está en descanso
               if (caja.clientes_en_fila.length > 0 && !caja.descansando) {
                 const siguiente = caja.clientes_en_fila.shift();
                 siguiente.tiempo_estimado = calcularTiempoAtencion(siguiente, caja.cajero.multiplicador);
@@ -667,9 +640,8 @@ function App() {
                 caja.tiempo_restante_cliente_actual = siguiente.tiempo_estimado;
               }
             } else {
-              caja.tiempo_restante_cliente_actual -= 1;
-              // sólo acumular horas si está atendiendo a un cliente (trabajando)
-              caja.cajero.horas_trabajadas += 1; // acumular segundo
+              caja.tiempo_restante_cliente_actual -= 1; // avanzar 1s lógico por paso
+              caja.cajero.horas_trabajadas += 1; // acumular segundo lógico
               if (caja.tiempo_restante_cliente_actual <= 0) {
                 caja.clientes_atendidos.push(caja.cliente_actual);
                 caja.cliente_actual = null;
@@ -680,30 +652,9 @@ function App() {
           return copia;
         });
 
-        // Express: evaluar abandonos y avanzar
         setCajaExpress(prev => {
           if (!prev) return prev;
           const copia = { ...prev, clientes_en_fila: [...prev.clientes_en_fila], clientes_atendidos: [...prev.clientes_atendidos], perdida_total: prev.perdida_total || 0, clientes_perdidos: prev.clientes_perdidos || [] };
-          try {
-            let nuevaFila = [];
-            let tiempo_ahead = copia.tiempo_restante_cliente_actual || 0;
-            for (const cl of copia.clientes_en_fila) {
-              const est_por_cliente = ((cl.articulos || 0) * 3.5 + 7) * (copia.cajero && copia.cajero.multiplicador ? copia.cajero.multiplicador : 1);
-              if (tiempo_ahead > 240 || (cl.paciencia && tiempo_ahead > cl.paciencia)) {
-                copia.perdida_total = (copia.perdida_total || 0) + (cl.precio_total || 0);
-                copia.clientes_perdidos = copia.clientes_perdidos || [];
-                copia.clientes_perdidos.push(cl);
-                cl.abandono = true;
-                continue;
-              }
-              nuevaFila.push(cl);
-              tiempo_ahead += est_por_cliente;
-            }
-            copia.clientes_en_fila = nuevaFila;
-          } catch (e) {
-            // ignore
-          }
-
           if (!copia.cliente_actual) {
             if (copia.clientes_en_fila.length > 0 && !copia.descansando) {
               const siguiente = copia.clientes_en_fila.shift();
@@ -722,31 +673,106 @@ function App() {
           }
           return copia;
         });
-
-        // Registro de utilización y apertura automática
-        // calcular ocupados
-        const currentCajas = cajasRef.current || [];
-        // actualizar utilizacionRegistroRef
-        let servidores = (currentCajas ? currentCajas.length : 0) + (cajaExpressRef.current ? 1 : 0);
-        servidores = Math.max(1, servidores);
-        let ocupados = 0;
-        const allCajas = [...(cajasRef.current || []), cajaExpressRef.current].filter(Boolean);
-        for (const c of allCajas) {
-          if (c.cliente_actual || (c.clientes_en_fila && c.clientes_en_fila.length>0)) ocupados += 1;
-        }
-        const rhoActual = ocupados / servidores;
-        utilizacionRegistroRef.current.push(rhoActual);
-        if (utilizacionRegistroRef.current.length > rhoPeriodo) utilizacionRegistroRef.current.shift();
-
-        // (no se calcula Lq promedio en UI actual)
-        // Apertura automática desactivada en frontend (la lógica de apertura)
-        // se gestiona manualmente en el backend. No crear cajas aquí.
       }
 
+      // 2) Actualizar tiempo en fila (solo 1s por tick para que visual sea apreciable) y procesar abandonos de última posición
+      setCajas(prev => {
+        const copia = prev.map(c => ({ ...c, clientes_en_fila: [...c.clientes_en_fila], perdida_total: c.perdida_total || 0, clientes_perdidos: c.clientes_perdidos || [] }));
+        for (const caja of copia) {
+          try {
+            const nuevaFila = [...caja.clientes_en_fila];
+            for (let idx = nuevaFila.length - 1; idx >= 0; idx--) {
+              const cl = nuevaFila[idx];
+              // incrementar sólo 1s por tick para visual
+              cl.tiempo_en_fila = (cl.tiempo_en_fila || 0) + 1;
+
+              // Si ya está marcado para remover, decrementar y eliminar cuando llegue a 0
+              if (cl.abandono && typeof cl._removerCountdown === 'number') {
+                cl._removerCountdown = Math.max(0, cl._removerCountdown - 1);
+                if (cl._removerCountdown === 0) {
+                  caja.perdida_total = (caja.perdida_total || 0) + (cl.precio_total || 0);
+                  caja.clientes_perdidos = caja.clientes_perdidos || [];
+                  caja.clientes_perdidos.push(cl);
+                  nuevaFila.splice(idx, 1);
+                  continue;
+                }
+                continue;
+              }
+
+              // Sólo la última posición puede abandonar: lo hace tras 200s en fila.
+              const esUltimo = (idx === nuevaFila.length - 1);
+                if (esUltimo) {
+                  // Abandono ahora basado en la paciencia individual del cliente
+                  const paciencia = (cl.paciencia || 200);
+                  if ((cl.tiempo_en_fila || 0) >= paciencia) {
+                    cl.abandono = true;
+                    cl._removerCountdown = modoRapido ? 6 : 2; // mostrar borde azul más tiempo en modo rápido
+                    continue;
+                  }
+                }
+            }
+            caja.clientes_en_fila = nuevaFila;
+          } catch {
+            // ignorar errores
+          }
+        }
+        return copia;
+      });
+
+      setCajaExpress(prev => {
+        if (!prev) return prev;
+        const copia = { ...prev, clientes_en_fila: [...prev.clientes_en_fila], perdida_total: prev.perdida_total || 0, clientes_perdidos: prev.clientes_perdidos || [] };
+        try {
+          const nuevaFila = [...copia.clientes_en_fila];
+          for (let idx = nuevaFila.length - 1; idx >= 0; idx--) {
+            const cl = nuevaFila[idx];
+            cl.tiempo_en_fila = (cl.tiempo_en_fila || 0) + 1;
+            if (cl.abandono && typeof cl._removerCountdown === 'number') {
+              cl._removerCountdown = Math.max(0, cl._removerCountdown - 1);
+              if (cl._removerCountdown === 0) {
+                copia.perdida_total = (copia.perdida_total || 0) + (cl.precio_total || 0);
+                copia.clientes_perdidos = copia.clientes_perdidos || [];
+                copia.clientes_perdidos.push(cl);
+                nuevaFila.splice(idx, 1);
+                continue;
+              }
+              continue;
+            }
+            const esUltimoE = (idx === nuevaFila.length - 1);
+            if (esUltimoE) {
+              const pacienciaE = (cl.paciencia || 200);
+              if ((cl.tiempo_en_fila || 0) >= pacienciaE) {
+                cl.abandono = true;
+                cl._removerCountdown = modoRapido ? 6 : 2;
+                continue;
+              }
+            }
+          }
+          copia.clientes_en_fila = nuevaFila;
+        } catch {
+          // ignore
+        }
+        return copia;
+      });
+
+      // Registro de utilización
+      const currentCajas = cajasRef.current || [];
+      let servidores = (currentCajas ? currentCajas.length : 0) + (cajaExpressRef.current ? 1 : 0);
+      servidores = Math.max(1, servidores);
+      let ocupados = 0;
+      const allCajas = [...(cajasRef.current || []), cajaExpressRef.current].filter(Boolean);
+      for (const c of allCajas) {
+        if (c.cliente_actual || (c.clientes_en_fila && c.clientes_en_fila.length > 0)) ocupados += 1;
+      }
+      const rhoActual = ocupados / servidores;
+      utilizacionRegistroRef.current.push(rhoActual);
+      if (utilizacionRegistroRef.current.length > rhoPeriodo) utilizacionRegistroRef.current.shift();
+
       // Actualizar estadoAnimado y tiempo
-      setEstadoAnimado(() => {
+      // Usamos setTimeout(,0) para dejar que React actualice `cajasRef.current`/`cajaExpressRef` antes de clonar
+      setTimeout(() => {
         const all = [...(cajasRef.current || []), cajaExpressRef.current].filter(Boolean);
-        return all.map(caja => ({
+        setEstadoAnimado(all.map(caja => ({
           clientes: deepClone(caja.clientes_en_fila || []),
           cajero: caja.cajero,
           esExpress: caja.nombre.toLowerCase().includes('express'),
@@ -760,9 +786,9 @@ function App() {
           rojoTiempoTotal: 0,
           tiemposClientes: (caja.clientes_en_fila || []).map(c => c.tiempo_estimado || 0),
           tiempoRojo: 0,
-        }));
-      });
-      setTiempo(t => t+1);
+        })));
+      }, 0);
+      setTiempo(t => t + 1);
     }, modoRapido ? 200 : 1000);
     return () => clearInterval(timerRef.current);
   }, [enAnimacion, modoRapido, cajas.length, cajaExpress]);
@@ -771,6 +797,8 @@ function App() {
 
   // Render animación si está activa
   const mostrarAnimacion = enAnimacion && estadoAnimado.length > 0;
+  // Lista global de abandonos para mostrar en la UI
+  const abandonos = obtenerAbandonosGlobal();
 
   // Calcular métricas para mostrar
   const costoTotal = calcularCostoTotalLocal();
@@ -787,44 +815,50 @@ function App() {
         <button onClick={handleSimular} disabled={simulando || enAnimacion} style={{fontSize: '1.2em', padding: '12px 32px', borderRadius: '8px', background: '#1e90ff', color: '#fff', border: 'none', cursor: 'pointer', boxShadow: '1px 1px 8px #111', fontWeight: 'bold', letterSpacing: '1px'}}>
           {simulando ? 'Simulando...' : enAnimacion ? 'Simulación en curso...' : 'Crear nueva simulación (random)'}
         </button>
+          {/* Botón de ejemplo eliminado */}
         <button onClick={handleIniciarManual} disabled={simulando || enAnimacion} style={{fontSize: '1.2em', padding: '12px 32px', borderRadius: '8px', background: '#28a745', color: '#fff', border: 'none', cursor: 'pointer', boxShadow: '1px 1px 8px #111', fontWeight: 'bold', letterSpacing: '1px'}}>
           Iniciar simulación (manual)
         </button>
-        <button onClick={() => {
-          // Agregar caja manualmente en frontend y rebalancear la mitad de la cola más larga
-          const nueva = {
-            nombre: `Caja ${cajas.length + 1}`,
-            cajero: { experiencia: 'Normal', experiencia_raw: 2, multiplicador: 1.0, horas_trabajadas: 0, sueldo_base: 400 },
-            clientes_en_fila: [],
-            cliente_actual: null,
-            tiempo_restante_cliente_actual: 0,
-            clientes_atendidos: []
-          };
-          setCajas(prev => {
-            const copia = [...prev];
-            // buscar cola mas larga entre cajas normales
-            let maxIdx = -1; let maxLen = 0;
-            for (let i = 0; i < copia.length; i++) {
-              const l = copia[i].clientes_en_fila ? copia[i].clientes_en_fila.length : 0;
-              if (l > maxLen) { maxLen = l; maxIdx = i; }
-            }
-            // mover la mitad (ceil) si existe
-            const nuevaCaja = { ...nueva };
-            if (maxIdx >= 0 && maxLen > 0) {
-              const origen = copia[maxIdx];
-              const mover = Math.ceil(maxLen / 2);
-              for (let k = 0; k < mover; k++) {
-                if (origen.clientes_en_fila && origen.clientes_en_fila.length > 0) {
-                  nuevaCaja.clientes_en_fila.push(origen.clientes_en_fila.shift());
+        {cajas.length < 6 && (
+          <button
+            onClick={() => {
+              // Agregar caja manualmente en frontend y rebalancear la mitad de la cola más larga
+              const nueva = {
+                nombre: `Caja ${cajas.length + 1}`,
+                cajero: { experiencia: 'Normal', experiencia_raw: 2, multiplicador: 1.0, horas_trabajadas: 0, sueldo_base: 400 },
+                clientes_en_fila: [],
+                cliente_actual: null,
+                tiempo_restante_cliente_actual: 0,
+                clientes_atendidos: []
+              };
+              setCajas(prev => {
+                const copia = [...prev];
+                // buscar cola mas larga entre cajas normales
+                let maxIdx = -1; let maxLen = 0;
+                for (let i = 0; i < copia.length; i++) {
+                  const l = copia[i].clientes_en_fila ? copia[i].clientes_en_fila.length : 0;
+                  if (l > maxLen) { maxLen = l; maxIdx = i; }
                 }
-              }
-            }
-            copia.push(nuevaCaja);
-            return copia;
-          });
-        }} style={{fontSize: '1.1em', padding: '12px 24px', borderRadius: '8px', background: '#ff8c00', color: '#fff', border: 'none', cursor: 'pointer'}}>
-          Agregar caja
-        </button>
+                // mover la mitad (ceil) si existe
+                const nuevaCaja = { ...nueva };
+                if (maxIdx >= 0 && maxLen > 0) {
+                  const origen = copia[maxIdx];
+                  const mover = Math.ceil(maxLen / 2);
+                  for (let k = 0; k < mover; k++) {
+                    if (origen.clientes_en_fila && origen.clientes_en_fila.length > 0) {
+                      nuevaCaja.clientes_en_fila.push(origen.clientes_en_fila.shift());
+                    }
+                  }
+                }
+                copia.push(nuevaCaja);
+                return copia;
+              });
+            }}
+            style={{fontSize: '1.1em', padding: '12px 24px', borderRadius: '8px', background: '#ff8c00', color: '#fff', border: 'none', cursor: 'pointer'}}
+          >
+            Agregar caja
+          </button>
+        )}
         <button onClick={handleDetener} disabled={!enAnimacion} style={{fontSize: '1.2em', padding: '12px 32px', borderRadius: '8px', background: '#ff5555', color: '#fff', border: 'none', cursor: enAnimacion ? 'pointer' : 'not-allowed', fontWeight: 'bold', letterSpacing: '1px'}}>
           Detener simulación
         </button>
@@ -873,12 +907,12 @@ function App() {
         ) : ([
           ...cajas.map((caja, i) => (
             <div key={i} style={{display: 'flex', flexDirection: 'column', alignItems: 'center'}}>
-              <Caja
+                <Caja
                 nombre={caja.nombre}
                 clientes={caja.clientes_en_fila}
                 esExpress={caja.nombre.toLowerCase().includes('express')}
                 cajero={caja.cajero}
-                articulosRojo={caja.cliente_rojo.articulos}
+                articulosRojo={(caja.cliente_rojo && caja.cliente_rojo.articulos) ? caja.cliente_rojo.articulos : 0}
               />
             </div>
           )),
@@ -889,7 +923,7 @@ function App() {
                 clientes={cajaExpress.clientes_en_fila}
                 esExpress={true}
                 cajero={cajaExpress.cajero}
-                articulosRojo={cajaExpress.cliente_rojo.articulos}
+                articulosRojo={(cajaExpress.cliente_rojo && cajaExpress.cliente_rojo.articulos) ? cajaExpress.cliente_rojo.articulos : 0}
               />
             </div>
           )
@@ -1049,6 +1083,7 @@ function App() {
                 <th style={{padding: 6}}>Total</th>
                 <th style={{padding: 6}}>Pérdidas</th>
                 <th style={{padding: 6}}>Clientes perdidos</th>
+                  <th style={{padding: 6}}>Lista abandonos</th>
               </tr>
             </thead>
             <tbody>
@@ -1064,14 +1099,53 @@ function App() {
                 >
                   <td style={{padding: 6}}>{r.nombre}</td>
                   <td style={{padding: 6, textAlign: 'center'}}>{r.clientesAtendidos}</td>
-                  <td style={{padding: 6, textAlign: 'center'}}>{r.horasTrab}</td>
+                  <td style={{padding: 6, textAlign: 'center'}}>{Number.isFinite(r.horasTrab) ? r.horasTrab : (r.horasTrab)}</td>
                   <td style={{padding: 6, textAlign: 'right'}}>{r.total.toFixed(2)}</td>
                   <td style={{padding: 6, textAlign: 'right', color: '#ffbaba'}}>${(r.perdidaTotal || 0).toFixed(2)}</td>
                   <td style={{padding: 6, textAlign: 'center', color: '#ffbaba'}}>{r.clientesPerdidos || 0}</td>
+                  <td style={{padding: 6, textAlign: 'left', color: '#bfe6ff', maxWidth: 240, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}} title={r.listaAbandonos}>{r.listaAbandonos || '-'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
+          {/* Panel: listado de clientes que abandonaron */}
+          <div style={{marginTop: 18, background: '#0f1720', padding: 12, borderRadius: 8, color: '#fff'}}>
+            <h3 style={{margin: '6px 0 10px 0', color: '#1e90ff'}}>Clientes que abandonaron</h3>
+            {abandonos.length === 0 ? (
+              <div style={{color: '#bbb'}}>No hay abandonos.</div>
+            ) : (
+              <div style={{maxHeight: 180, overflowY: 'auto'}}>
+                <table style={{width: '100%', borderCollapse: 'collapse'}}>
+                  <thead>
+                    <tr style={{textAlign: 'left', borderBottom: '1px solid #233'}}>
+                      <th style={{padding: 6}}>Caja</th>
+                      <th style={{padding: 6}}>Cliente</th>
+                      <th style={{padding: 6}}>Tiempo en fila (s)</th>
+                      <th style={{padding: 6}}>Precio</th>
+                      <th style={{padding: 6}}>Extra</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {abandonos.map((a, idx) => (
+                      <tr key={idx} style={{borderBottom: '1px solid #111'}}>
+                        <td style={{padding: 6}}>{a.caja}</td>
+                        <td style={{padding: 6}}>{a.nombre}</td>
+                        <td style={{padding: 6}}>{a.tiempo_en_fila}</td>
+                        <td style={{padding: 6, textAlign: 'right'}}>${a.precio_total.toFixed ? a.precio_total.toFixed(2) : a.precio_total}</td>
+                        <td style={{padding: 6}}>{a.agregado_por_demanda ? 'Sí' : '-'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div style={{marginTop: 8, textAlign: 'right'}}>
+              <button onClick={() => {
+                setCajas(prev => prev.map(c => ({ ...c, clientes_perdidos: [], perdida_total: 0 })));
+                if (cajaExpress) setCajaExpress(prev => prev ? ({ ...prev, clientes_perdidos: [], perdida_total: 0 }) : prev);
+              }} style={{padding: '6px 10px', borderRadius: 6, background: '#ff5555', color: '#fff', border: 'none'}}>Limpiar lista</button>
+            </div>
+          </div>
         </div>
       </div>
       </div>
