@@ -11,7 +11,8 @@ class Articulo:
         #random se usa para simular la variabilidad en los tiempos
         self.tiempo_escaneo     = random.randint(1, 5)
         self.tiempo_empaquetado = random.randint(1, 5)
-        #precio
+        # precio del artículo (moneda local), variabilidad entre 5 y 150
+        self.precio = round(random.uniform(5.0, 150.0), 2)
 
 
     #to_str para la presentación del objeto en la consola (posiblemente lo cambie)

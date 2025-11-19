@@ -215,6 +215,7 @@ class Supermercado:
             'cliente_rojo_articulos': cliente_rojo_articulos,
             'resumen_comparacion': resumen,
             'costo_total': self.calcular_costo_total(),
+            'perdidas_por_caja': { c.nombre: getattr(c, 'perdida_total', 0.0) for c in self.cajas + [self.caja_express] },
             # Devolver solo la cantidad de cajas normales. La caja express
             # se gestiona por separado para evitar mostrar siempre +1.
             'num_cajas_actuales': len(self.cajas)
@@ -272,6 +273,8 @@ class Supermercado:
             'atendidos': [
                 {'nombre': c.nombre, 'articulos': c.num_articulos} for c in caja.clientes_atendidos
             ],
+            'perdidas': getattr(caja, 'perdida_total', 0.0),
+            'clientes_perdidos': len(getattr(caja, 'clientes_perdidos', [])),
             'cliente_rojo': {
                 'articulos': clientes_fila[-1]['articulos'],
                 'tiempo_estimado': tiempo_total
@@ -362,7 +365,26 @@ class Supermercado:
                 penalizacion = float(self.penalizacion_sla)
 
         costo_total = suma_costos_hora + costo_espera + penalizacion
+        # Añadir pérdidas por abandonos de clientes como parte del costo total
+        try:
+            perdidas_total = 0.0
+            for caja in self.cajas + [self.caja_express]:
+                perdidas_total += float(getattr(caja, 'perdida_total', 0.0))
+            costo_total += perdidas_total
+        except Exception:
+            pass
         return costo_total
+
+    def evaluar_abrir_por_perdida(self, costo_apertura: float, penalizacion_apertura: float = 0.0) -> bool:
+        """
+        Evaluar si conviene abrir una nueva caja basándose en las pérdidas actuales
+        por abandonos. Devuelve True si las pérdidas acumuladas superan el costo
+        de apertura + penalización.
+        """
+        perdidas_total = 0.0
+        for caja in self.cajas + [self.caja_express]:
+            perdidas_total += float(getattr(caja, 'perdida_total', 0.0))
+        return perdidas_total > (float(costo_apertura) + float(penalizacion_apertura))
 
     def abrir_nueva_caja_si_necesario(self):
         """

@@ -27,7 +27,7 @@ function App() {
       };
     };
 
-    const crearCajaLocal = (nombre) => ({
+    const crearCajaLocal = (nombre, descansoHora = null) => ({
       nombre,
       cajero: crearCajero(),
       clientes_en_fila: [],
@@ -35,11 +35,15 @@ function App() {
       tiempo_restante_cliente_actual: 0,
       clientes_atendidos: [],
       descansando: false,
-      descansoHora: null
+      descansoHora,
+      // pérdidas acumuladas por abandonos en esta caja (frontend)
+      perdida_total: 0,
+      clientes_perdidos: []
     });
 
-    const cajasInit = [crearCajaLocal('Caja 1'), crearCajaLocal('Caja 2'), crearCajaLocal('Caja 3')];
-    const cajaExpress = crearCajaLocal('Caja Express');
+    // Asignar descansos por defecto: Caja 1 descansa 12-13, Caja 2 descansa 13-14
+    const cajasInit = [crearCajaLocal('Caja 1', 12), crearCajaLocal('Caja 2', 13), crearCajaLocal('Caja 3', null)];
+    const cajaExpress = crearCajaLocal('Caja Express', null);
     setCajas(cajasInit);
     setCajaExpress(cajaExpress);
   }, []);
@@ -64,14 +68,28 @@ function App() {
 
     // Asignar manualmente clientes a cajas según inputs (sin usar APIs)
     // Construir clientes y añadir a la caja correspondiente
-    const crearClienteLocal = (nombre, agregado = false) => ({
-      nombre,
-      articulos: Math.floor(10 + Math.random() * 6),
-      metodo_pago: ['Efectivo','Tarjeta','Transferencia'][Math.floor(Math.random()*3)],
-      tiempo_estimado: null,
-      es_rojo: nombre === 'Cliente Rojo',
-      agregado_por_demanda: agregado,
-    });
+    const crearClienteLocal = (nombre, agregado = false) => {
+      const articulos = Math.floor(10 + Math.random() * 6);
+      // paciencia en segundos (2..6 minutos)
+      const paciencia = Math.floor(120 + Math.random() * (360 - 120 + 1));
+      // precio total estimado sumando precios aleatorios por artículo (5..150)
+      let precio_total = 0;
+      for (let i = 0; i < articulos; i++) {
+        precio_total += Math.random() * (150 - 5) + 5;
+      }
+      precio_total = Math.round(precio_total * 100) / 100;
+      return {
+        nombre,
+        articulos,
+        metodo_pago: ['Efectivo','Tarjeta','Transferencia'][Math.floor(Math.random()*3)],
+        tiempo_estimado: null,
+        es_rojo: nombre === 'Cliente Rojo',
+        agregado_por_demanda: agregado,
+        paciencia,
+        precio_total,
+        abandono: false
+      };
+    };
 
     // Aplicar entradas manuales (ajustando por día/hora seleccionados)
     const cajasCopy = [...cajas];
@@ -463,13 +481,18 @@ function App() {
     const rows = [];
     for (const c of all) {
       const nombre = c.nombre || 'Caja';
-      const clientesAtendidos = (c.clientes_atendidos || []).length;
-      const horasTrab = (c.cajero && c.cajero.horas_trabajadas ? c.cajero.horas_trabajadas : 0) / 3600; // en horas
-      // Aplicar la fórmula del usuario: (sueldo_base / horasTrab) * clientesAtendidos
-      const sueldo = (c.cajero && c.cajero.sueldo_base) ? c.cajero.sueldo_base : 0;
-      const denom = Math.max(horasTrab, 0.01); // evitar división por cero (cap a 0.01h ~36s)
-      const total = clientesAtendidos * (sueldo / denom);
-      rows.push({ nombre, clientesAtendidos, horasTrab, total });
+        const clientesAtendidos = (c.clientes_atendidos || []).length;
+        // horas trabajadas como entero (horas), cap a 12h por día
+        const horasTrabSeconds = (c.cajero && c.cajero.horas_trabajadas ? c.cajero.horas_trabajadas : 0);
+        const horasTrabInt = Math.min(12, Math.floor(horasTrabSeconds / 3600));
+        // Aplicar la fórmula del usuario: (sueldo_base / horasTrab) * clientesAtendidos
+        const sueldo = (c.cajero && c.cajero.sueldo_base) ? c.cajero.sueldo_base : 0;
+        const denom = Math.max(horasTrabInt, 1); // evitar división por cero, usar al menos 1h
+        const total = clientesAtendidos * (sueldo / denom);
+        // Añadir métricas de pérdidas y clientes perdidos (si el frontend acumuló abandonos)
+        const perdidaTotal = c.perdida_total || 0;
+        const clientesPerdidos = (c.clientes_perdidos || []).length || 0;
+        rows.push({ nombre, clientesAtendidos, horasTrab: horasTrabInt, total, perdidaTotal, clientesPerdidos });
     }
     return rows;
   };
@@ -496,10 +519,29 @@ function App() {
         tiempo_estimado: null,
         es_rojo: !!esRojo,
         agregado_por_demanda: agregado,
+        paciencia: Math.floor(120 + Math.random() * (360 - 120 + 1)),
+        precio_total: Math.round(Array.from({ length: (esRojo ? Math.floor(8 + Math.random() * 8) : Math.floor(10 + Math.random() * 6)) }).reduce((s) => s + (Math.random() * (150 - 5) + 5), 0) * 100) / 100,
+        abandono: false
       });
 
       const cajasCopy = [...cajas].map(c => ({ ...c, clientes_en_fila: [...(c.clientes_en_fila||[])] }));
       const cajaExpressCopy = cajaExpress ? { ...cajaExpress, clientes_en_fila: [...(cajaExpress.clientes_en_fila||[])] } : null;
+
+      // Si no existen previewBases para las cajas actuales, generarlas ahora para asegurar variabilidad aleatoria
+      try {
+        const names = [...(cajasCopy || []).map(c => c.nombre), cajaExpressCopy ? cajaExpressCopy.nombre : null].filter(Boolean);
+        const missing = names.filter(n => !previewBases || previewBases[n] === undefined);
+        if (missing.length > 0) {
+          const map = { ...(previewBases || {}) };
+          const minBase = Math.max(1, BASE_PER_CAJA - 4);
+          for (const name of missing) {
+            map[name] = minBase + Math.floor(Math.random() * 11); // rango: BASE-4 .. BASE+6
+          }
+          setPreviewBases(map);
+        }
+      } catch {
+        // silencioso
+      }
 
       // Para cada caja disponible, calcular cantidad ajustada y añadir esos clientes
       const disponiblesParaDistribuir = [...cajasCopy.filter(c => !c.descansando)];
@@ -585,8 +627,30 @@ function App() {
       for (let p=0;p<pasos;p++) {
         // Actualizar cada caja localmente
         setCajas(prev => {
-          const copia = prev.map(c => ({ ...c, clientes_en_fila: [...c.clientes_en_fila], clientes_atendidos: [...c.clientes_atendidos] }));
+          const copia = prev.map(c => ({ ...c, clientes_en_fila: [...c.clientes_en_fila], clientes_atendidos: [...c.clientes_atendidos], perdida_total: c.perdida_total || 0, clientes_perdidos: c.clientes_perdidos || [] }));
           for (const caja of copia) {
+            // Evaluar abandonos en la fila antes de iniciar atención
+            try {
+              let nuevaFila = [];
+              let tiempo_ahead = caja.tiempo_restante_cliente_actual || 0;
+              for (const cl of caja.clientes_en_fila) {
+                const est_por_cliente = ((cl.articulos || 0) * 3.5 + 7) * (caja.cajero && caja.cajero.multiplicador ? caja.cajero.multiplicador : 1);
+                if (tiempo_ahead > 240 || (cl.paciencia && tiempo_ahead > cl.paciencia)) {
+                  // cliente abandona
+                  caja.perdida_total = (caja.perdida_total || 0) + (cl.precio_total || 0);
+                  caja.clientes_perdidos = caja.clientes_perdidos || [];
+                  caja.clientes_perdidos.push(cl);
+                  cl.abandono = true;
+                  continue;
+                }
+                nuevaFila.push(cl);
+                tiempo_ahead += est_por_cliente;
+              }
+              caja.clientes_en_fila = nuevaFila;
+            } catch (e) {
+              // ignorar errores en cálculo de abandonos
+            }
+
             if (!caja.cliente_actual) {
               // no iniciar nuevo cliente si la caja está en descanso
               if (caja.clientes_en_fila.length > 0 && !caja.descansando) {
@@ -609,12 +673,31 @@ function App() {
           return copia;
         });
 
-        // Express
+        // Express: evaluar abandonos y avanzar
         setCajaExpress(prev => {
           if (!prev) return prev;
-          const copia = { ...prev, clientes_en_fila: [...prev.clientes_en_fila], clientes_atendidos: [...prev.clientes_atendidos] };
+          const copia = { ...prev, clientes_en_fila: [...prev.clientes_en_fila], clientes_atendidos: [...prev.clientes_atendidos], perdida_total: prev.perdida_total || 0, clientes_perdidos: prev.clientes_perdidos || [] };
+          try {
+            let nuevaFila = [];
+            let tiempo_ahead = copia.tiempo_restante_cliente_actual || 0;
+            for (const cl of copia.clientes_en_fila) {
+              const est_por_cliente = ((cl.articulos || 0) * 3.5 + 7) * (copia.cajero && copia.cajero.multiplicador ? copia.cajero.multiplicador : 1);
+              if (tiempo_ahead > 240 || (cl.paciencia && tiempo_ahead > cl.paciencia)) {
+                copia.perdida_total = (copia.perdida_total || 0) + (cl.precio_total || 0);
+                copia.clientes_perdidos = copia.clientes_perdidos || [];
+                copia.clientes_perdidos.push(cl);
+                cl.abandono = true;
+                continue;
+              }
+              nuevaFila.push(cl);
+              tiempo_ahead += est_por_cliente;
+            }
+            copia.clientes_en_fila = nuevaFila;
+          } catch (e) {
+            // ignore
+          }
+
           if (!copia.cliente_actual) {
-            // no iniciar nuevo cliente si la expres está en descanso
             if (copia.clientes_en_fila.length > 0 && !copia.descansando) {
               const siguiente = copia.clientes_en_fila.shift();
               siguiente.tiempo_estimado = calcularTiempoAtencion(siguiente, copia.cajero.multiplicador);
@@ -943,40 +1026,7 @@ function App() {
           </>
         )}
       </div>
-      {/* Tabla solicitada: número de clientes atendidos, horas trabajadas y total (fórmula del usuario) */}
-      <div style={{width: '86%', maxWidth: 980, marginTop: 16, marginBottom: 12}}>
-        {cajaSeleccionada && (
-          <div style={{color:'#1e90ff', marginBottom:8, fontWeight:'bold'}}>Caja seleccionada: {cajaSeleccionada}</div>
-        )}
-        <table style={{width: '100%', borderCollapse: 'collapse', color: '#fff'}}>
-          <thead>
-            <tr style={{textAlign: 'left', borderBottom: '1px solid #333'}}>
-              <th style={{padding: 6}}>Caja</th>
-              <th style={{padding: 6}}>Clientes atendidos</th>
-              <th style={{padding: 6}}>Horas trabajadas</th>
-              <th style={{padding: 6}}>Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            {calcularTablaSalarios().map((r, i) => (
-              <tr
-                key={i}
-                onClick={() => setCajaSeleccionada(r.nombre)}
-                style={{
-                  borderBottom: '1px solid #222',
-                  cursor: 'pointer',
-                  background: cajaSeleccionada === r.nombre ? '#1e90ff22' : 'transparent'
-                }}
-              >
-                <td style={{padding: 6}}>{r.nombre}</td>
-                <td style={{padding: 6}}>{r.clientesAtendidos}</td>
-                <td style={{padding: 6}}>{r.horasTrab.toFixed(2)}</td>
-                <td style={{padding: 6}}>{r.total.toFixed(2)}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      
 
       {/* Tabla de comparación del cliente rojo */}
   {simulacionActiva && comparacionRojo.length > 0 && (
@@ -1013,6 +1063,46 @@ function App() {
           🏆 La caja más rápida fue: {mejorCajaRojo}
         </div>
       )}
+      {/* Tabla solicitada: número de clientes atendidos, horas trabajadas y total (fórmula del usuario) - centrada y más abajo */}
+      <div style={{width: '100%', display: 'flex', justifyContent: 'center', marginTop: 56, marginBottom: 56}}>
+        <div style={{width: '86%', maxWidth: 980}}>
+          {cajaSeleccionada && (
+            <div style={{color:'#1e90ff', marginBottom:8, fontWeight:'bold', textAlign: 'center'}}>Caja seleccionada: {cajaSeleccionada}</div>
+          )}
+          <table style={{width: '100%', borderCollapse: 'collapse', color: '#fff'}}>
+            <thead>
+              <tr style={{textAlign: 'left', borderBottom: '1px solid #333'}}>
+                <th style={{padding: 6}}>Caja</th>
+                <th style={{padding: 6}}>Clientes atendidos</th>
+                <th style={{padding: 6}}>Horas trabajadas</th>
+                <th style={{padding: 6}}>Total</th>
+                <th style={{padding: 6}}>Pérdidas</th>
+                <th style={{padding: 6}}>Clientes perdidos</th>
+              </tr>
+            </thead>
+            <tbody>
+              {calcularTablaSalarios().map((r, i) => (
+                <tr
+                  key={i}
+                  onClick={() => setCajaSeleccionada(r.nombre)}
+                  style={{
+                    borderBottom: '1px solid #222',
+                    cursor: 'pointer',
+                    background: cajaSeleccionada === r.nombre ? '#1e90ff22' : 'transparent'
+                  }}
+                >
+                  <td style={{padding: 6}}>{r.nombre}</td>
+                  <td style={{padding: 6, textAlign: 'center'}}>{r.clientesAtendidos}</td>
+                  <td style={{padding: 6, textAlign: 'center'}}>{r.horasTrab}</td>
+                  <td style={{padding: 6, textAlign: 'right'}}>{r.total.toFixed(2)}</td>
+                  <td style={{padding: 6, textAlign: 'right', color: '#ffbaba'}}>${(r.perdidaTotal || 0).toFixed(2)}</td>
+                  <td style={{padding: 6, textAlign: 'center', color: '#ffbaba'}}>{r.clientesPerdidos || 0}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
       </div>
   );
 }
