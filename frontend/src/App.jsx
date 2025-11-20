@@ -6,6 +6,9 @@ import './App.css';
 import Caja from './Caja';
 // Nota: panel de configuración temporal removido para mantener compatibilidad
 
+// Tarifa por hora usada en la tabla de costos (declarada una sola vez)
+const TARIFA_POR_HORA = 0.50;
+
 
 function App() {
   // Inicializar estado local para la simulación (frontend-only)
@@ -18,11 +21,13 @@ function App() {
       if (experienciaRaw === 1) { multiplicador = 1.5; experienciaStr = 'Principiante'; }
       else if (experienciaRaw === 2) { multiplicador = 1.0; experienciaStr = 'Normal'; }
       else { multiplicador = 0.7; experienciaStr = 'Experto'; }
+      const previewHoras = (1 + Math.floor(Math.random() * 12));
       return {
         experiencia: experienciaStr,
         experiencia_raw: experienciaRaw,
         multiplicador,
-        horas_trabajadas: 0, // segundos
+        horas_trabajadas: 0, // segundos reales acumulados durante la simulación
+        preview_horas_trabajadas_seconds: previewHoras * 3600,
         sueldo_base: 400,
       };
     };
@@ -112,6 +117,20 @@ function App() {
       clientes_perdidos: [],
       cajero: { ...(cajaExpress.cajero || {}), horas_trabajadas: 0 }
     }) : null;
+    // Generar nuevos previews aleatorios (1..12h) y persistir en localStorage cada vez que iniciamos
+    try {
+      for (const c of cajasCopy) {
+        if (!c || !c.cajero) continue;
+        const ph = (1 + Math.floor(Math.random() * 12)) * 3600;
+        c.cajero.preview_horas_trabajadas_seconds = ph;
+        try { window.localStorage.setItem(`preview_horas_${(c.nombre||'').replace(/\s+/g,'_')}`, String(ph)); } catch (e) { void e; }
+      }
+      if (cajaExpressCopy && cajaExpressCopy.cajero) {
+        const phE = (1 + Math.floor(Math.random() * 12)) * 3600;
+        cajaExpressCopy.cajero.preview_horas_trabajadas_seconds = phE;
+        try { window.localStorage.setItem(`preview_horas_${(cajaExpressCopy.nombre||'').replace(/\s+/g,'_')}`, String(phE)); } catch (e) { void e; }
+      }
+    } catch (e) { void e; }
     // Si hay una caja seleccionada en la tabla, calcular referencia para usar como destino
     const destinoSeleccionado = cajaSeleccionada ? (cajasCopy.find(c => c.nombre === cajaSeleccionada) || (cajaExpressCopy && cajaExpressCopy.nombre === cajaSeleccionada ? cajaExpressCopy : null)) : null;
     // Calcular multiplicador y cantidades ajustadas por cada input, pero NO asignar extras todavía
@@ -301,7 +320,8 @@ function App() {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: `nombre=${encodeURIComponent(nombreCaja)}&tipo=${encodeURIComponent(tipo)}`
       });
-    } catch {
+    } catch (e) {
+      void e;
       // Silencioso: si no hay backend, la selección sigue afectando solo al frontend
     }
   }
@@ -315,6 +335,23 @@ function App() {
   const cajaExpressRef = useRef(cajaExpress);
   useEffect(()=>{ cajasRef.current = cajas; }, [cajas]);
   useEffect(()=>{ cajaExpressRef.current = cajaExpress; }, [cajaExpress]);
+  // Asegurar que cada cajero tenga un preview de horas estable (1..12 h) guardado en el estado
+  useEffect(() => {
+    let needUpdate = false;
+    const updated = (cajas || []).map(c => {
+      if (!c || !c.cajero) return c;
+      if (!c.cajero.preview_horas_trabajadas_seconds || c.cajero.preview_horas_trabajadas_seconds <= 0) {
+        needUpdate = true;
+        return { ...c, cajero: { ...c.cajero, preview_horas_trabajadas_seconds: (1 + Math.floor(Math.random() * 12)) * 3600 } };
+      }
+      return c;
+    });
+    if (needUpdate) setCajas(updated);
+    if (cajaExpress && (!cajaExpress.cajero || !cajaExpress.cajero.preview_horas_trabajadas_seconds || cajaExpress.cajero.preview_horas_trabajadas_seconds <= 0)) {
+      const ph = (1 + Math.floor(Math.random() * 12)) * 3600;
+      setCajaExpress(prev => prev ? ({ ...prev, cajero: { ...(prev.cajero || {}), preview_horas_trabajadas_seconds: ph } }) : prev);
+    }
+  }, [cajas, cajaExpress]);
   // Mantener `cajeroPorCaja` en sincronía con el estado `cajas` / `cajaExpress`.
   useEffect(() => {
     const map = {};
@@ -430,7 +467,8 @@ function App() {
   // Calcular costo total localmente (sumatoria costo_por_hora + costo espera + penalización)
   const calcularCostoTotalLocal = () => {
     const desglose = calcularCostosPorCaja();
-    return desglose.reduce((s, r) => s + (r.total || 0), 0);
+    // Sumar pago por horas más pérdidas por abandonos para obtener costo total
+    return desglose.reduce((s, r) => s + (r.total || 0) + (r.perdidaTotal || 0), 0);
   };
 
   // Devuelve arreglo con desglose de costos por caja
@@ -440,19 +478,54 @@ function App() {
     for (const c of all) {
       const nombre = c.nombre || 'Caja';
       const clientesAtendidos = (c.clientes_atendidos || []).length;
-      // horas trabajadas como entero (horas), mostrar en rango 1..8
-      const horasTrabSeconds = (c.cajero && c.cajero.horas_trabajadas ? c.cajero.horas_trabajadas : 0);
-      const horasTrab = Math.min(8, Math.max(1, Math.floor(horasTrabSeconds / 3600)));
-      // Aplicar la fórmula del usuario: (sueldo_base / horasTrab) * clientesAtendidos
-      const sueldo = (c.cajero && c.cajero.sueldo_base) ? c.cajero.sueldo_base : 0;
-      const denom = Math.max(horasTrab, 1); // evitar división por cero, usar al menos 1h
-      const total = clientesAtendidos * (sueldo / denom);
       // Añadir métricas de pérdidas y clientes perdidos (si el frontend acumuló abandonos)
       const perdidaTotal = c.perdida_total || 0;
       const clientesPerdidos = (c.clientes_perdidos || []).length || 0;
       // lista de nombres de clientes que abandonaron (para mostrar en la tabla)
       const listaAbandonos = (c.clientes_perdidos || []).map(cl => cl && cl.nombre ? cl.nombre : '').filter(Boolean).join(', ');
-      rows.push({ nombre, clientesAtendidos, horasTrab, total, perdidaTotal, clientesPerdidos, listaAbandonos });
+      // horas trabajadas como entero (horas)
+      // Si la caja está descansando mostramos 0 horas y pago 0.
+      // Rango válido para horas trabajadas: 1..12 (cuando no está descansando)
+      // Si no hay simulación activa, mostrar 0 horas (antes de iniciar)
+      if (!enAnimacion && !simulacionActiva) {
+        rows.push({ nombre, clientesAtendidos, horasTrab: 0, total: 0, perdidaTotal, clientesPerdidos, listaAbandonos });
+        continue;
+      }
+
+      // Durante simulación: usar un valor aleatorio estable entre 1..12 horas (preview)
+      // Si falta el preview, generarlo, persistirlo y usarlo. No usamos las horas reales
+      // para sobreescribir el preview visual que el usuario pidió.
+      let previewSeconds = 0;
+      try {
+        const key = `preview_horas_${(c.nombre || '').replace(/\s+/g, '_')}`;
+        const stored = window.localStorage.getItem(key);
+        if (stored) {
+          const parsed = parseInt(stored, 10);
+          if (!Number.isNaN(parsed) && parsed > 0) previewSeconds = parsed;
+        }
+        // fallback al valor dentro del objeto cajero si existe
+        if (!previewSeconds && c.cajero && c.cajero.preview_horas_trabajadas_seconds && c.cajero.preview_horas_trabajadas_seconds > 0) {
+          previewSeconds = c.cajero.preview_horas_trabajadas_seconds;
+        }
+        // si aún no hay preview, generar uno aleatorio entre 1..12 h y persistir
+        if (!previewSeconds) {
+          const ph = (1 + Math.floor(Math.random() * 12)) * 3600;
+          previewSeconds = ph;
+          try { window.localStorage.setItem(key, String(previewSeconds)); } catch (e) { void e; }
+          // también dejarlo en el objeto cajero para consistencia en memoria
+          if (c.cajero) c.cajero.preview_horas_trabajadas_seconds = previewSeconds;
+        }
+      } catch (e) {
+        void e;
+        if (c.cajero && c.cajero.preview_horas_trabajadas_seconds && c.cajero.preview_horas_trabajadas_seconds > 0) previewSeconds = c.cajero.preview_horas_trabajadas_seconds;
+      }
+
+      const previewHours = Math.max(1, Math.min(12, Math.floor(previewSeconds / 3600) || 1));
+      const horasComputed = c.descansando ? 0 : previewHours;
+      const total = c.descansando ? 0 : (TARIFA_POR_HORA * horasComputed);
+      rows.push({ nombre, clientesAtendidos, horasTrab: horasComputed, total, perdidaTotal, clientesPerdidos, listaAbandonos });
+      continue;
+      
     }
     return rows;
   };
@@ -528,6 +601,21 @@ function App() {
         cajero: { ...(cajaExpress.cajero || {}), horas_trabajadas: 0 }
       } : null;
 
+      // Generar nuevos previews aleatorios (1..12h) y persistir en localStorage cada vez que iniciamos
+      try {
+        for (const c of cajasCopy) {
+          if (!c || !c.cajero) continue;
+          const ph = (1 + Math.floor(Math.random() * 12)) * 3600;
+          c.cajero.preview_horas_trabajadas_seconds = ph;
+          try { window.localStorage.setItem(`preview_horas_${(c.nombre||'').replace(/\s+/g,'_')}`, String(ph)); } catch (e) { void e; }
+        }
+        if (cajaExpressCopy && cajaExpressCopy.cajero) {
+          const phE = (1 + Math.floor(Math.random() * 12)) * 3600;
+          cajaExpressCopy.cajero.preview_horas_trabajadas_seconds = phE;
+          try { window.localStorage.setItem(`preview_horas_${(cajaExpressCopy.nombre||'').replace(/\s+/g,'_')}`, String(phE)); } catch (e) { void e; }
+        }
+      } catch (e) { void e; }
+
       // Si no existen previewBases para las cajas actuales, generarlas ahora para asegurar variabilidad aleatoria
       try {
         const names = [...(cajasCopy || []).map(c => c.nombre), cajaExpressCopy ? cajaExpressCopy.nombre : null].filter(Boolean);
@@ -540,7 +628,8 @@ function App() {
           }
           setPreviewBases(map);
         }
-      } catch {
+      } catch (e) {
+        void e;
         // silencioso
       }
 
@@ -595,7 +684,8 @@ function App() {
         tiempoRojo: 0,
       })));
       setEnAnimacion(true);
-    } catch {
+    } catch (e) {
+      void e;
       alert('Error al conectar con el backend');
       setEnAnimacion(false);
     }
@@ -615,7 +705,8 @@ function App() {
         map[name] = minBase + variability; // rango: BASE-4 .. BASE+6..+? (ajustable)
       }
       setPreviewBases(map);
-    } catch {
+    } catch (e) {
+      void e;
       // silencioso
     }
   }, [cajas, cajaExpress, selectedDay, selectedHour]);
@@ -712,7 +803,8 @@ function App() {
                 }
             }
             caja.clientes_en_fila = nuevaFila;
-          } catch {
+          } catch (e) {
+            void e;
             // ignorar errores
           }
         }
@@ -749,7 +841,8 @@ function App() {
             }
           }
           copia.clientes_en_fila = nuevaFila;
-        } catch {
+        } catch (e) {
+          void e;
           // ignore
         }
         return copia;
@@ -825,7 +918,7 @@ function App() {
               // Agregar caja manualmente en frontend y rebalancear la mitad de la cola más larga
               const nueva = {
                 nombre: `Caja ${cajas.length + 1}`,
-                cajero: { experiencia: 'Normal', experiencia_raw: 2, multiplicador: 1.0, horas_trabajadas: 0, sueldo_base: 400 },
+                cajero: { experiencia: 'Normal', experiencia_raw: 2, multiplicador: 1.0, horas_trabajadas: 0, preview_horas_trabajadas_seconds: (1 + Math.floor(Math.random() * 12)) * 3600, sueldo_base: 400 },
                 clientes_en_fila: [],
                 cliente_actual: null,
                 tiempo_restante_cliente_actual: 0,
@@ -1099,7 +1192,9 @@ function App() {
                 >
                   <td style={{padding: 6}}>{r.nombre}</td>
                   <td style={{padding: 6, textAlign: 'center'}}>{r.clientesAtendidos}</td>
-                  <td style={{padding: 6, textAlign: 'center'}}>{Number.isFinite(r.horasTrab) ? r.horasTrab : (r.horasTrab)}</td>
+                  <td style={{padding: 6, textAlign: 'center'}}>
+                    {Number.isFinite(r.horasTrab) ? r.horasTrab : (r.horasTrab)}
+                  </td>
                   <td style={{padding: 6, textAlign: 'right'}}>{r.total.toFixed(2)}</td>
                   <td style={{padding: 6, textAlign: 'right', color: '#ffbaba'}}>${(r.perdidaTotal || 0).toFixed(2)}</td>
                   <td style={{padding: 6, textAlign: 'center', color: '#ffbaba'}}>{r.clientesPerdidos || 0}</td>
@@ -1143,7 +1238,43 @@ function App() {
               <button onClick={() => {
                 setCajas(prev => prev.map(c => ({ ...c, clientes_perdidos: [], perdida_total: 0 })));
                 if (cajaExpress) setCajaExpress(prev => prev ? ({ ...prev, clientes_perdidos: [], perdida_total: 0 }) : prev);
-              }} style={{padding: '6px 10px', borderRadius: 6, background: '#ff5555', color: '#fff', border: 'none'}}>Limpiar lista</button>
+              }} style={{padding: '6px 10px', borderRadius: 6, background: '#ff5555', color: '#fff', border: 'none', marginRight: 8}}>Limpiar lista</button>
+              <button onClick={() => {
+                // Forzar un abandono de demo: mover el último cliente de la primera caja con clientes a clientes_perdidos
+                let done = false;
+                setCajas(prev => {
+                  const copia = prev.map(c => ({ ...c, clientes_en_fila: [...(c.clientes_en_fila||[])], clientes_perdidos: c.clientes_perdidos || [], perdida_total: c.perdida_total || 0 }));
+                  for (const caja of copia) {
+                    if (!done && caja.clientes_en_fila && caja.clientes_en_fila.length > 0) {
+                      const idx = caja.clientes_en_fila.length - 1;
+                      const cl = caja.clientes_en_fila[idx];
+                      // marcar como perdido y mover
+                      caja.clientes_perdidos = caja.clientes_perdidos || [];
+                      caja.clientes_perdidos.push(cl);
+                      caja.perdida_total = (caja.perdida_total || 0) + (cl.precio_total || 0);
+                      caja.clientes_en_fila.splice(idx, 1);
+                      done = true;
+                      break;
+                    }
+                  }
+                  return copia;
+                });
+                if (!done && cajaExpress) {
+                  setCajaExpress(prev => {
+                    if (!prev) return prev;
+                    if (prev.clientes_en_fila && prev.clientes_en_fila.length > 0) {
+                      const copia = { ...prev, clientes_en_fila: [...prev.clientes_en_fila], clientes_perdidos: prev.clientes_perdidos || [], perdida_total: prev.perdida_total || 0 };
+                      const idx = copia.clientes_en_fila.length - 1;
+                      const cl = copia.clientes_en_fila[idx];
+                      copia.clientes_perdidos.push(cl);
+                      copia.perdida_total = (copia.perdida_total || 0) + (cl.precio_total || 0);
+                      copia.clientes_en_fila.splice(idx, 1);
+                      return copia;
+                    }
+                    return prev;
+                  });
+                }
+              }} style={{padding: '6px 10px', borderRadius: 6, background: '#1e90ff', color: '#fff', border: 'none'}}>Forzar abandono (demo)</button>
             </div>
           </div>
         </div>
