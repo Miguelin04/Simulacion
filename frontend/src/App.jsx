@@ -427,8 +427,18 @@ function App() {
   };
 
   const handleSelectHour = (h) => {
+    // Actualizar el estado de hora seleccionada
     setSelectedHour(h);
-    // Nueva regla de descansos automáticos:
+    // Si es día 4,5 o 6 (viernes,sábado,domingo) y estamos en hora pico 12:00,
+    // NO aplicar descansos: todas las cajas deben estar activas.
+    const diasSinDescanso = [4, 5, 6];
+    if (diasSinDescanso.includes(selectedDay) && (h === 12 || h === 13)) {
+      setCajas(prev => prev.map(c => ({ ...c, descansando: false })));
+      setCajaExpress(prev => prev ? { ...prev, descansando: false } : prev);
+      return;
+    }
+
+    // Nueva regla de descansos automáticos (comportamiento por defecto para otros días):
     // - Si selecciona 12:00 => Caja 2 y todas las cajas adicionales (índice >=1) descansan (12-13).
     // - Si selecciona 13:00 => Caja 1 y Caja Express descansan (13-14).
     // - Otras horas => ninguna caja en descanso automático.
@@ -544,7 +554,8 @@ function App() {
           nombre: cl.nombre || '-',
           tiempo_en_fila: cl.tiempo_en_fila || 0,
           precio_total: cl.precio_total || 0,
-          agregado_por_demanda: cl.agregado_por_demanda || false
+          agregado_por_demanda: cl.agregado_por_demanda || false,
+          abandono: cl.marcar_abandono || cl.abandono || false
         });
       }
     }
@@ -777,30 +788,23 @@ function App() {
               // incrementar sólo 1s por tick para visual
               cl.tiempo_en_fila = (cl.tiempo_en_fila || 0) + 1;
 
-              // Si ya está marcado para remover, decrementar y eliminar cuando llegue a 0
-              if (cl.abandono && typeof cl._removerCountdown === 'number') {
-                cl._removerCountdown = Math.max(0, cl._removerCountdown - 1);
-                if (cl._removerCountdown === 0) {
+              // Sólo la última posición puede abandonar: lo hace tras 200s en fila.
+              const esUltimo = (idx === nuevaFila.length - 1);
+              if (esUltimo) {
+                // Abandono ahora basado en la paciencia individual del cliente
+                const paciencia = (cl.paciencia || 200);
+                if ((cl.tiempo_en_fila || 0) >= paciencia) {
+                  // Mover inmediatamente al listado de perdidos y marcar como abandono
+                  cl.abandono = true;
+                  cl.marcar_abandono = true;
                   caja.perdida_total = (caja.perdida_total || 0) + (cl.precio_total || 0);
                   caja.clientes_perdidos = caja.clientes_perdidos || [];
                   caja.clientes_perdidos.push(cl);
+                  // quitar de la fila
                   nuevaFila.splice(idx, 1);
                   continue;
                 }
-                continue;
               }
-
-              // Sólo la última posición puede abandonar: lo hace tras 200s en fila.
-              const esUltimo = (idx === nuevaFila.length - 1);
-                if (esUltimo) {
-                  // Abandono ahora basado en la paciencia individual del cliente
-                  const paciencia = (cl.paciencia || 200);
-                  if ((cl.tiempo_en_fila || 0) >= paciencia) {
-                    cl.abandono = true;
-                    cl._removerCountdown = modoRapido ? 6 : 2; // mostrar borde azul más tiempo en modo rápido
-                    continue;
-                  }
-                }
             }
             caja.clientes_en_fila = nuevaFila;
           } catch (e) {
@@ -819,23 +823,16 @@ function App() {
           for (let idx = nuevaFila.length - 1; idx >= 0; idx--) {
             const cl = nuevaFila[idx];
             cl.tiempo_en_fila = (cl.tiempo_en_fila || 0) + 1;
-            if (cl.abandono && typeof cl._removerCountdown === 'number') {
-              cl._removerCountdown = Math.max(0, cl._removerCountdown - 1);
-              if (cl._removerCountdown === 0) {
-                copia.perdida_total = (copia.perdida_total || 0) + (cl.precio_total || 0);
-                copia.clientes_perdidos = copia.clientes_perdidos || [];
-                copia.clientes_perdidos.push(cl);
-                nuevaFila.splice(idx, 1);
-                continue;
-              }
-              continue;
-            }
             const esUltimoE = (idx === nuevaFila.length - 1);
             if (esUltimoE) {
               const pacienciaE = (cl.paciencia || 200);
               if ((cl.tiempo_en_fila || 0) >= pacienciaE) {
                 cl.abandono = true;
-                cl._removerCountdown = modoRapido ? 6 : 2;
+                cl.marcar_abandono = true;
+                copia.perdida_total = (copia.perdida_total || 0) + (cl.precio_total || 0);
+                copia.clientes_perdidos = copia.clientes_perdidos || [];
+                copia.clientes_perdidos.push(cl);
+                nuevaFila.splice(idx, 1);
                 continue;
               }
             }
@@ -1222,8 +1219,8 @@ function App() {
                   </thead>
                   <tbody>
                     {abandonos.map((a, idx) => (
-                      <tr key={idx} style={{borderBottom: '1px solid #111'}}>
-                        <td style={{padding: 6}}>{a.caja}</td>
+                      <tr key={idx} style={{borderBottom: '1px solid #111', background: a.abandono ? '#e6f2ff22' : 'transparent'}}>
+                        <td style={{padding: 6, borderLeft: a.abandono ? '4px solid #1e90ff' : 'none'}}>{a.caja}</td>
                         <td style={{padding: 6}}>{a.nombre}</td>
                         <td style={{padding: 6}}>{a.tiempo_en_fila}</td>
                         <td style={{padding: 6, textAlign: 'right'}}>${a.precio_total.toFixed ? a.precio_total.toFixed(2) : a.precio_total}</td>
@@ -1249,6 +1246,7 @@ function App() {
                       const idx = caja.clientes_en_fila.length - 1;
                       const cl = caja.clientes_en_fila[idx];
                       // marcar como perdido y mover
+                      cl.marcar_abandono = true;
                       caja.clientes_perdidos = caja.clientes_perdidos || [];
                       caja.clientes_perdidos.push(cl);
                       caja.perdida_total = (caja.perdida_total || 0) + (cl.precio_total || 0);
@@ -1266,7 +1264,8 @@ function App() {
                       const copia = { ...prev, clientes_en_fila: [...prev.clientes_en_fila], clientes_perdidos: prev.clientes_perdidos || [], perdida_total: prev.perdida_total || 0 };
                       const idx = copia.clientes_en_fila.length - 1;
                       const cl = copia.clientes_en_fila[idx];
-                      copia.clientes_perdidos.push(cl);
+                        cl.marcar_abandono = true;
+                        copia.clientes_perdidos.push(cl);
                       copia.perdida_total = (copia.perdida_total || 0) + (cl.precio_total || 0);
                       copia.clientes_en_fila.splice(idx, 1);
                       return copia;

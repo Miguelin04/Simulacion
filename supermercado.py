@@ -102,6 +102,11 @@ class Supermercado:
         # Por defecto, la apertura automática de cajas está deshabilitada.
         # El usuario puede abrir cajas manualmente mediante la interfaz o un endpoint.
         self.auto_open_enabled = False
+        # Registro de pérdidas por segundo (última hora -> 3600s).
+        # Cada entrada es la pérdida detectada en ese segundo (float >= 0).
+        self.perdidas_por_segundo = []
+        # Total de pérdidas observado en la última iteración (para calcular diffs)
+        self._perdidas_total_prev = 0.0
 
     def asignar_clientes(self, num_clientes):
         for i in range(num_clientes):
@@ -146,6 +151,22 @@ class Supermercado:
         # Calcular Lq (longitud promedio de colas)
         longitudes = [len(caja.clientes_en_fila) for caja in self.cajas] + [len(self.caja_express.clientes_en_fila)]
         lq_promedio = sum(longitudes) / float(len(longitudes)) if longitudes else 0.0
+
+        # Registrar nuevas pérdidas detectadas en este segundo: sumar diferencia con el total previo
+        try:
+            actuales_perdidas = 0.0
+            for caja in self.cajas + [self.caja_express]:
+                actuales_perdidas += float(getattr(caja, 'perdida_total', 0.0))
+            diff = max(0.0, actuales_perdidas - float(self._perdidas_total_prev))
+            # Añadir la pérdida detectada en este segundo (puede ser 0)
+            self.perdidas_por_segundo.append(diff)
+            # Mantener sólo la última hora (3600 segundos)
+            if len(self.perdidas_por_segundo) > 3600:
+                self.perdidas_por_segundo.pop(0)
+            self._perdidas_total_prev = actuales_perdidas
+        except Exception:
+            # Si falla el registro de pérdidas, seguir sin interrumpir la simulación
+            pass
 
         # Revisar regla de apertura automática
         try:
@@ -384,7 +405,24 @@ class Supermercado:
         perdidas_total = 0.0
         for caja in self.cajas + [self.caja_express]:
             perdidas_total += float(getattr(caja, 'perdida_total', 0.0))
-        return perdidas_total > (float(costo_apertura) + float(penalizacion_apertura))
+        # Si las pérdidas totales superan el umbral económico simple
+        if perdidas_total > (float(costo_apertura) + float(penalizacion_apertura)):
+            return True
+        # Evaluar pérdidas en la última hora frente al 50% del sueldo horario
+        try:
+            perdidas_ultima_hora = sum(self.perdidas_por_segundo)
+            from cajero import Cajero
+            cajero_tmp = Cajero()
+            try:
+                cajero_tmp.sueldo_base = float(self.default_sueldo_base)
+            except Exception:
+                pass
+            costo_hora_cajero = cajero_tmp.costo_por_hora()
+            if perdidas_ultima_hora > 0.5 * float(costo_hora_cajero):
+                return True
+        except Exception:
+            pass
+        return False
 
     def abrir_nueva_caja_si_necesario(self):
         """
@@ -411,6 +449,24 @@ class Supermercado:
 
         # Si alguno de los umbrales se supera, abrir una caja
         if lq_promedio > self.lq_umbral or rho_promedio > self.rho_umbral:
+            # Antes de crear una nueva caja, verificar que las pérdidas en la última hora
+            # justifican el costo: pérdidas_última_hora > 50% del sueldo horario del cajero.
+            try:
+                perdidas_ultima_hora = sum(self.perdidas_por_segundo)
+                from cajero import Cajero
+                cajero_tmp = Cajero()
+                try:
+                    cajero_tmp.sueldo_base = float(self.default_sueldo_base)
+                except Exception:
+                    pass
+                costo_hora_cajero = cajero_tmp.costo_por_hora()
+                if not (perdidas_ultima_hora > 0.5 * float(costo_hora_cajero)):
+                    # No conviene abrir: pérdidas por hora no justifican el costo
+                    return False
+            except Exception:
+                # Si falla la comprobación, continuar y abrir por seguridad
+                pass
+
             # Crear nueva caja (con 0 clientes inicialmente)
             nueva = Caja(0, nombre=f"Caja {len(self.cajas)+1}")
             # Su cajero tendrá sueldo_base por defecto; si se desea, el llamador puede modificarlo

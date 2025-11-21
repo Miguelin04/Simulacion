@@ -7,9 +7,12 @@ function Caja({ nombre, clientes = [], esExpress, esMejor, cajero, animando, ate
   // Ocultar el cliente rojo si la simulación no está animando y solo hay el cliente rojo
   // Asegurarse de que `clientes` siempre sea un arreglo para evitar errores
   // cuando el backend o props no lo proveen (evita "Cannot read properties of undefined (reading 'filter')").
-  let clientesEnFila = clientes;
+  let clientesEnFila = clientes || [];
+  // Excluir inmediatamente a los clientes que fueron marcados como abandono
+  // para que no se muestren en la cola de la caja (aparecen en la tabla de abandonos).
+  clientesEnFila = clientesEnFila.filter(c => !(c && (c.marcar_abandono || c.abandono)));
   if (!animando) {
-    clientesEnFila = (clientes || []).filter(c => c.nombre !== 'Cliente Rojo');
+    clientesEnFila = clientesEnFila.filter(c => c.nombre !== 'Cliente Rojo');
   }
   const atendidosCount = animando ? atendidos.length : 0;
   // Mostrar el cliente que está siendo atendido con el tiempo restante
