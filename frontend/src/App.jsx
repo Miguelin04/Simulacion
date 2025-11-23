@@ -429,27 +429,24 @@ function App() {
   const handleSelectHour = (h) => {
     // Actualizar el estado de hora seleccionada
     setSelectedHour(h);
-    // Si es día 4,5 o 6 (viernes,sábado,domingo) y estamos en hora pico 12:00,
-    // NO aplicar descansos: todas las cajas deben estar activas.
-    const diasSinDescanso = [4, 5, 6];
-    if (diasSinDescanso.includes(selectedDay) && (h === 12 || h === 13)) {
-      setCajas(prev => prev.map(c => ({ ...c, descansando: false })));
-      setCajaExpress(prev => prev ? { ...prev, descansando: false } : prev);
-      return;
-    }
+    // Nuevo comportamiento: a partir de las 12:00 cada hora descansa una caja en orden:
+    // 12 -> Caja 1, 13 -> Caja 2, 14 -> Caja 3, 15 -> Caja Express,
+    // si hay cajas adicionales, descansan en 16,17,... respectivamente.
+    const restIndex = h - 12; // 0 => Caja1, 1 => Caja2, ...
+    // Total de cajas normales (dinámico)
+    const numNormal = (cajasRef.current || []).length;
+    const totalSlots = numNormal + (cajaExpress ? 1 : 0);
 
-    // Nueva regla de descansos automáticos (comportamiento por defecto para otros días):
-    // - Si selecciona 12:00 => Caja 2 y todas las cajas adicionales (índice >=1) descansan (12-13).
-    // - Si selecciona 13:00 => Caja 1 y Caja Express descansan (13-14).
-    // - Otras horas => ninguna caja en descanso automático.
-    if (h === 12) {
-      setCajas(prev => prev.map((c, idx) => ({ ...c, descansando: idx >= 1 })));
-      setCajaExpress(prev => prev ? { ...prev, descansando: false } : prev);
-    } else if (h === 13) {
-      setCajas(prev => prev.map((c, idx) => ({ ...c, descansando: idx === 0 })));
-      setCajaExpress(prev => prev ? { ...prev, descansando: true } : prev);
+    if (restIndex >= 0 && restIndex < totalSlots) {
+      // Marcar exactamente la caja correspondiente como descansando, las demás activas
+      setCajas(prev => prev.map((c, idx) => ({ ...c, descansando: idx === restIndex })));
+      setCajaExpress(prev => {
+        if (!prev) return prev;
+        const expressIdx = numNormal; // índice lógico de la caja express
+        return { ...prev, descansando: restIndex === expressIdx };
+      });
     } else {
-      // no descansos automáticos fuera de las horas 12/13
+      // Fuera del intervalo de descansos rotativos, ninguna caja descansa
       setCajas(prev => prev.map(c => ({ ...c, descansando: false })));
       setCajaExpress(prev => prev ? { ...prev, descansando: false } : prev);
     }
